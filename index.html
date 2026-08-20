@@ -8,63 +8,241 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg-deep: #0b1220; --bg-panel: #121b2e; --bg-panel-hover: #17233b;
-    --line: #253352; --text-main: #e7ecf5; --text-dim: #8a96b3;
-    --metal: #6fb3ff; --crystal: #f0a850; --defense: #a855f7;
-    --ok: #4fd1a5; --warn: #ff6b6b;
+    --bg-deep: #0b1220;
+    --bg-panel: #121b2e;
+    --bg-panel-hover: #17233b;
+    --line: #253352;
+    --text-main: #e7ecf5;
+    --text-dim: #8a96b3;
+    --metal: #6fb3ff;
+    --crystal: #f0a850;
+    --defense: #a855f7;
+    --ok: #4fd1a5;
+    --warn: #ff6b6b;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg-deep); color: var(--text-main); font-family: 'Inter', sans-serif; min-height: 100vh; padding: 32px 20px 60px; }
-  .wrap { max-width: 780px; margin: 0 auto; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(ellipse at 20% -10%, #1a2744 0%, transparent 55%),
+      radial-gradient(ellipse at 90% 10%, #1c1a3a 0%, transparent 45%),
+      var(--bg-deep);
+    color: var(--text-main);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    padding: 32px 20px 60px;
+  }
+  .stars {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      radial-gradient(1px 1px at 10% 20%, #ffffff55, transparent),
+      radial-gradient(1px 1px at 80% 60%, #ffffff44, transparent),
+      radial-gradient(1px 1px at 40% 80%, #ffffff33, transparent),
+      radial-gradient(1px 1px at 60% 30%, #ffffff55, transparent);
+    background-repeat: repeat;
+    background-size: 600px 600px;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; position: relative; z-index: 1; }
+
+  /* Login screen */
+  .login-screen {
+    max-width: 380px;
+    margin: 80px auto;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+  .login-screen h1 { font-family: 'Space Mono', monospace; font-size: 22px; margin-bottom: 6px; }
+  .login-screen .sub { color: var(--text-dim); font-size: 14px; margin-bottom: 24px; }
+  .login-screen input {
+    width: 100%; background: var(--bg-panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px 16px; color: var(--text-main); font-size: 15px; margin-bottom: 14px; outline: none;
+  }
+  .login-screen input:focus { border-color: var(--ok); }
+  .login-screen button {
+    width: 100%; background: var(--ok); color: #06251b; border: none;
+    border-radius: 8px; padding: 14px 16px; font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  .login-msg { font-size: 13px; color: var(--text-dim); margin-top: 12px; min-height: 18px; }
+  .login-msg.error { color: var(--warn); }
+
   header { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-start; }
-  h1 { font-family: 'Space Mono', monospace; font-size: 28px; margin: 6px 0 2px; }
+  .eyebrow { font-family: 'Space Mono', monospace; font-size: 12px; letter-spacing: 0.14em; color: var(--text-dim); text-transform: uppercase; }
+  h1 { font-family: 'Space Mono', monospace; font-size: 28px; margin: 6px 0 2px; font-weight: 700; }
   .sub { color: var(--text-dim); font-size: 14px; }
-  .section-label { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .signout {
+    background: none; border: 1px solid var(--line); color: var(--text-dim);
+    font-size: 12px; padding: 8px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  }
+  .signout:hover { border-color: var(--warn); color: var(--warn); }
+
   .resources { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0 30px; }
-  .res-card { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .res-card { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; position: relative; overflow: hidden; }
+  .res-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  .res-card.metal::before { background: var(--metal); }
+  .res-card.crystal::before { background: var(--crystal); }
   .res-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px; }
-  .res-value { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; }
-  .building { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  button.upgrade { background: #1a2440; border: 1px solid var(--line); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-  button.upgrade:disabled { opacity: 0.3; cursor: not-allowed; }
+  .res-value { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .res-rate { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: 'Space Mono', monospace; }
+
+  .section-label {
+    font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim);
+    letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 8px;
+  }
+
+  /* Galaxy Map */
   .galaxy-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-bottom: 30px; }
-  .planet-thumb { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; cursor: pointer; }
-  .planet-thumb:hover { border-color: var(--ok); }
+  .planet-thumb {
+    background: var(--bg-panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; text-align: center; cursor: pointer; transition: 0.15s;
+  }
+  .planet-thumb:hover { border-color: var(--ok); background: var(--bg-panel-hover); }
+  .planet-thumb .icon { font-size: 24px; margin-bottom: 4px; }
+  .planet-thumb .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .planet-thumb .info { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .buildings { display: flex; flex-direction: column; gap: 12px; }
+  .building {
+    background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .b-info { flex: 1; min-width: 0; }
+  .b-name-row { display: flex; align-items: baseline; gap: 10px; }
+  .b-name { font-weight: 600; font-size: 15px; }
+  .b-level { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); }
+  .b-detail { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+  .b-cost { font-family: 'Space Mono', monospace; }
+  .b-cost.metal-cost { color: var(--metal); }
+  .b-cost.crystal-cost { color: var(--crystal); }
+
+  button.upgrade {
+    font-family: 'Inter', sans-serif; font-weight: 600; font-size: 13px;
+    padding: 10px 18px; border-radius: 8px; border: 1px solid var(--line);
+    background: #1a2440; color: var(--text-main); cursor: pointer; white-space: nowrap;
+  }
+  button.upgrade:hover:not(:disabled) { border-color: var(--ok); background: #1c2c46; }
+  button.upgrade:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .sync-note { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+  .sync-note.saving { color: var(--ok); }
+
+  .fleet-card {
+    background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .fleet-count { font-family: 'Space Mono', monospace; font-size: 22px; font-weight: 700; }
+  .fleet-count-label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .fleet-build { display: flex; align-items: center; gap: 8px; }
+  .fleet-build input {
+    width: 80px; background: var(--bg-deep); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px; color: var(--text-main); font-family: 'Space Mono', monospace; font-size: 14px; outline: none;
+  }
+  .fleet-hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; width: 100%; }
+
+  .attack-card {
+    background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .attack-card input {
+    background: var(--bg-deep); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; color: var(--text-main); font-size: 14px; outline: none;
+  }
+  .attack-card input.target-input { flex: 1; min-width: 120px; }
+  .attack-card input.ship-input { width: 90px; font-family: 'Space Mono', monospace; }
+  button.attack-btn {
+    font-weight: 700; font-size: 13px; padding: 10px 20px; border-radius: 8px;
+    border: 1px solid var(--warn); background: #2a1414; color: var(--warn); cursor: pointer; white-space: nowrap;
+  }
+  button.attack-btn:hover:not(:disabled) { background: #3a1818; }
+  button.attack-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .attack-msg { font-size: 13px; margin-top: 4px; width: 100%; color: var(--text-dim); }
+  .attack-msg.win { color: var(--ok); }
+  .attack-msg.lose { color: var(--warn); }
+
+  .battle-log { display: flex; flex-direction: column; gap: 8px; }
+  .battle-entry { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; font-size: 13px; }
+  .battle-entry .b-time { color: var(--text-dim); font-size: 11px; font-family: 'Space Mono', monospace; }
+  .battle-entry.win { border-left: 3px solid var(--ok); }
+  .battle-entry.lose { border-left: 3px solid var(--warn); }
+  .battle-empty { color: var(--text-dim); font-size: 13px; padding: 8px 2px; }
+
+  footer { margin-top: 32px; font-size: 12px; color: var(--text-dim); text-align: center; }
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
+<div class="stars"></div>
 
-<div id="login-screen" class="wrap" style="max-width: 400px; margin-top: 100px; text-align: center;">
-  <h1>星際採礦站</h1>
-  <input type="text" id="player-input" placeholder="輸入玩家代號" style="width:100%; padding:10px; border-radius:6px; margin-bottom:10px;">
-  <button id="login-btn" style="width:100%; padding:10px; background:var(--ok); border:none; border-radius:6px; font-weight:bold;">進入星球</button>
+<!-- Login screen -->
+<div class="login-screen" id="login-screen">
+  <div class="eyebrow">星際採礦站</div>
+  <h1>登入你的星球</h1>
+  <div class="sub">輸入你的玩家代號。第一次登入會自動建立新星球。</div>
+  <input type="text" id="player-input" placeholder="例如:阿凱" maxlength="20" autocomplete="off">
+  <button id="login-btn">進入星球</button>
+  <div class="login-msg" id="login-msg"></div>
 </div>
 
-<div id="game-screen" class="wrap hidden">
+<!-- Game screen -->
+<div class="wrap hidden" id="game-screen">
   <header>
-    <div><h1 id="planet-title">殖民地</h1></div>
-    <button id="signout-btn" style="background:none; border:1px solid #333; color:#888; padding:5px 10px; cursor:pointer;">登出</button>
+    <div>
+      <div class="eyebrow" id="coord-label">星系座標 1:42:8</div>
+      <h1 id="planet-title">殖民地</h1>
+      <div class="sub">資源持續增長,升級建築以提升產量。</div>
+    </div>
+    <button class="signout" id="signout-btn">切換玩家</button>
   </header>
 
   <div class="resources">
-    <div class="res-card"><div class="res-label">金屬</div><div class="res-value" id="metal-value">0</div></div>
-    <div class="res-card"><div class="res-label">晶體</div><div class="res-value" id="crystal-value">0</div></div>
+    <div class="res-card metal">
+      <div class="res-label">金屬</div>
+      <div class="res-value" id="metal-value">0</div>
+      <div class="res-rate" id="metal-rate">+0 / 秒</div>
+    </div>
+    <div class="res-card crystal">
+      <div class="res-label">晶體</div>
+      <div class="res-value" id="crystal-value">0</div>
+      <div class="res-rate" id="crystal-rate">+0 / 秒</div>
+    </div>
   </div>
 
   <div class="section-label">銀河星系看板</div>
-  <div class="galaxy-map" id="galaxy-map"></div>
+  <div class="galaxy-map" id="galaxy-map">
+    <div class="battle-empty">載入中...</div>
+  </div>
 
   <div class="section-label">建築</div>
-  <div id="buildings"></div>
+  <div class="buildings" id="buildings"></div>
+  <div class="sync-note" id="sync-note">已與伺服器同步</div>
 
-  <div class="section-label">攻擊</div>
-  <div style="background:var(--bg-panel); padding:15px; border-radius:10px;">
-    <input type="text" id="target-name" placeholder="對方代號" style="background:#0b1220; border:1px solid #253352; color:white; padding:8px;">
-    <input type="number" id="attack-count" value="1" style="background:#0b1220; width:60px; border:1px solid #253352; color:white; padding:8px;">
-    <button id="attack-btn" style="background:var(--warn); color:white; border:none; padding:8px 15px; cursor:pointer;">發動攻擊</button>
-    <div id="attack-msg" style="margin-top:10px; font-size:13px;"></div>
+  <div class="section-label" style="margin-top:30px;">艦隊</div>
+  <div class="fleet-card">
+    <div>
+      <div class="fleet-count-label">戰鬥機數量</div>
+      <div class="fleet-count" id="fighter-count">0</div>
+    </div>
+    <div class="fleet-build">
+      <input type="number" id="build-count" min="1" value="1">
+      <button class="upgrade" id="build-btn">建造</button>
+    </div>
+    <div class="fleet-hint" id="build-hint">每艘 50 金屬 · 20 晶體</div>
   </div>
+
+  <div class="section-label" style="margin-top:30px;">攻擊</div>
+  <div class="attack-card">
+    <input type="text" class="target-input" id="target-name" placeholder="對方玩家代號" autocomplete="off">
+    <input type="number" class="ship-input" id="attack-count" min="1" value="1" placeholder="艦數">
+    <button class="attack-btn" id="attack-btn">發動攻擊</button>
+    <div class="attack-msg" id="attack-msg"></div>
+  </div>
+
+  <div class="section-label" style="margin-top:30px;">戰報</div>
+  <div class="battle-log" id="battle-log">
+    <div class="battle-empty">尚無戰鬥紀錄</div>
+  </div>
+
+  <footer>多人連線版本 · 資料即時存進資料庫</footer>
 </div>
 
 <script>
@@ -74,8 +252,18 @@
   async function restRequest(path, options = {}) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
       ...options,
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation', ...(options.headers || {}) }
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+        ...(options.headers || {}),
+      },
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
@@ -85,78 +273,426 @@
     crystalMine: { name: '晶體精煉廠', resource: 'crystal', baseRate: 4, baseCost: { metal: 48, crystal: 24 }, levelField: 'crystal_mine_level' },
     laserTower: { name: '雷射砲台', resource: 'defense', baseRate: 0, baseCost: { metal: 100, crystal: 50 }, levelField: 'laser_tower_level' }
   };
+  const FIGHTER_COST = { metal: 50, crystal: 20 };
+  const STEAL_FRACTION = 0.2;
 
-  let planet = null, localMetal = 0, localCrystal = 0;
+  let planet = null;
+  let localMetal = 0;
+  let localCrystal = 0;
+  let lastTickLocal = Date.now();
+  let saveTimer = null;
+  let tickInterval = null;
+  let battleLogInterval = null;
+  let galaxyMapInterval = null;
 
+  function productionRate(level, def) {
+    if (def.resource === 'defense') return 0;
+    return def.baseRate * level * Math.pow(1.1, level);
+  }
+  function upgradeCost(level, def) {
+    const factor = Math.pow(1.5, level);
+    return {
+      metal: Math.round(def.baseCost.metal * factor),
+      crystal: Math.round(def.baseCost.crystal * factor),
+    };
+  }
+  function totalRate(resource) {
+    return Object.values(BUILDING_DEFS)
+      .filter(d => d.resource === resource)
+      .reduce((sum, d) => sum + productionRate(planet[d.levelField] || 0, d), 0);
+  }
+  function currentResourcesOf(p) {
+    const lastTick = new Date(p.last_tick).getTime();
+    const elapsedSec = Math.max(0, (Date.now() - lastTick) / 1000);
+    const metalRate = productionRate(p.metal_mine_level || 0, BUILDING_DEFS.metalMine);
+    const crystalRate = productionRate(p.crystal_mine_level || 0, BUILDING_DEFS.crystalMine);
+    return {
+      metal: Number(p.metal) + metalRate * elapsedSec,
+      crystal: Number(p.crystal) + crystalRate * elapsedSec,
+    };
+  }
   function fmt(n) { return Math.floor(n).toLocaleString('zh-TW'); }
 
+  const loginScreen = document.getElementById('login-screen');
+  const gameScreen = document.getElementById('game-screen');
+  const playerInput = document.getElementById('player-input');
+  const loginBtn = document.getElementById('login-btn');
+  const loginMsg = document.getElementById('login-msg');
+
   async function login() {
-    const name = document.getElementById('player-input').value.trim();
-    if (!name) return;
-    let rows = await restRequest(`planets?player_name=eq.${encodeURIComponent(name)}&select=*`);
-    if (rows && rows.length > 0) { planet = rows[0]; }
-    else { planet = (await restRequest('planets', { method: 'POST', body: JSON.stringify({ player_name: name, laser_tower_level: 0 }) }))[0]; }
-    
-    document.getElementById('login-screen').classList.add('hidden');
-    document.getElementById('game-screen').classList.remove('hidden');
-    document.getElementById('planet-title').textContent = planet.player_name + ' 的殖民地';
-    localMetal = Number(planet.metal); localCrystal = Number(planet.crystal);
+    const name = playerInput.value.trim();
+    if (!name) {
+      loginMsg.textContent = '請輸入玩家代號';
+      loginMsg.className = 'login-msg error';
+      return;
+    }
+    loginBtn.disabled = true;
+    loginMsg.textContent = '連線中...';
+    loginMsg.className = 'login-msg';
+
+    try {
+      const encodedName = encodeURIComponent(name);
+      let rows = await restRequest(`planets?player_name=eq.${encodedName}&select=*`);
+      let data = rows && rows.length > 0 ? rows[0] : null;
+
+      if (!data) {
+        const created = await restRequest('planets', {
+          method: 'POST',
+          body: JSON.stringify({ player_name: name, laser_tower_level: 0 }),
+        });
+        data = created[0];
+        loginMsg.textContent = '新星球建立成功!';
+      }
+
+      planet = data;
+      if (planet.laser_tower_level == null) planet.laser_tower_level = 0;
+      startGame(name);
+    } catch (err) {
+      console.error('Login error detail:', err);
+      loginMsg.textContent = '連線失敗:' + ((err && err.message) || String(err));
+      loginMsg.className = 'login-msg error';
+      loginBtn.disabled = false;
+    }
+  }
+
+  loginBtn.addEventListener('click', login);
+  playerInput.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+
+  document.getElementById('signout-btn').addEventListener('click', () => {
+    if (tickInterval) clearInterval(tickInterval);
+    if (saveTimer) clearTimeout(saveTimer);
+    if (battleLogInterval) clearInterval(battleLogInterval);
+    if (galaxyMapInterval) clearInterval(galaxyMapInterval);
+    planet = null;
+    loginBtn.disabled = false;
+    loginMsg.textContent = '';
+    playerInput.value = '';
+    gameScreen.classList.add('hidden');
+    loginScreen.classList.remove('hidden');
+  });
+
+  function startGame(name) {
+    loginScreen.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
+    document.getElementById('planet-title').textContent = name + ' 的殖民地';
+
+    const lastTickServer = new Date(planet.last_tick).getTime();
+    const now = Date.now();
+    const offlineSec = Math.max(0, (now - lastTickServer) / 1000);
+    localMetal = Number(planet.metal) + totalRate('metal') * offlineSec;
+    localCrystal = Number(planet.crystal) + totalRate('crystal') * offlineSec;
+    lastTickLocal = now;
+
     render();
+    tickInterval = setInterval(tick, 500);
+    scheduleSave();
+    loadBattleLog();
     loadGalaxyMap();
-    setInterval(render, 1000);
+    battleLogInterval = setInterval(loadBattleLog, 15000);
+    galaxyMapInterval = setInterval(loadGalaxyMap, 20000);
+  }
+
+  function tick() {
+    const now = Date.now();
+    const elapsedSec = (now - lastTickLocal) / 1000;
+    lastTickLocal = now;
+    localMetal += totalRate('metal') * elapsedSec;
+    localCrystal += totalRate('crystal') * elapsedSec;
+    render();
+  }
+
+  function scheduleSave() {
+    saveTimer = setTimeout(async () => {
+      await saveToServer();
+      scheduleSave();
+    }, 5000);
+  }
+
+  async function saveToServer() {
+    if (!planet) return;
+    const note = document.getElementById('sync-note');
+    note.textContent = '同步中...';
+    try {
+      await restRequest(`planets?id=eq.${planet.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          metal: localMetal,
+          crystal: localCrystal,
+          last_tick: new Date().toISOString(),
+          metal_mine_level: planet.metal_mine_level,
+          crystal_mine_level: planet.crystal_mine_level,
+          laser_tower_level: planet.laser_tower_level,
+          fighter_count: planet.fighter_count,
+        }),
+      });
+      note.textContent = '已與伺服器同步';
+      note.classList.add('saving');
+      setTimeout(() => note.classList.remove('saving'), 400);
+    } catch (err) {
+      console.error('Save error detail:', err);
+      note.textContent = '同步失敗,將於下次重試';
+    }
+  }
+
+  async function upgrade(key) {
+    const def = BUILDING_DEFS[key];
+    const level = planet[def.levelField] || 0;
+    const cost = upgradeCost(level, def);
+    if (localMetal < cost.metal || localCrystal < cost.crystal) return;
+
+    localMetal -= cost.metal;
+    localCrystal -= cost.crystal;
+    planet[def.levelField] = level + 1;
+    render();
+    await saveToServer();
   }
 
   async function loadGalaxyMap() {
-    const players = await restRequest('planets?select=player_name,fighter_count');
     const container = document.getElementById('galaxy-map');
-    container.innerHTML = players.map(p => `
-      <div class="planet-thumb" onclick="document.getElementById('target-name').value='${p.player_name}'">
-        <div style="font-size:20px;">🪐</div>
-        <span style="font-size:12px;">${p.player_name}</span>
-      </div>
-    `).join('');
+    try {
+      const players = await restRequest('planets?select=player_name,fighter_count,laser_tower_level');
+      if (!players || players.length === 0) {
+        container.innerHTML = '<div class="battle-empty">暫無其他星球</div>';
+        return;
+      }
+      container.innerHTML = players.map(p => `
+        <div class="planet-thumb" onclick="setTarget('${p.player_name}')">
+          <div class="icon">🪐</div>
+          <div class="name">${p.player_name}</div>
+          <div class="info">艦: ${fmt(p.fighter_count)} | 塔: ${p.laser_tower_level || 0}</div>
+        </div>
+      `).join('');
+    } catch (err) {
+      console.error('Galaxy map error:', err);
+    }
+  }
+
+  function setTarget(name) {
+    document.getElementById('target-name').value = name;
+    document.getElementById('target-name').scrollIntoView({ behavior: 'smooth' });
   }
 
   function render() {
     document.getElementById('metal-value').textContent = fmt(localMetal);
     document.getElementById('crystal-value').textContent = fmt(localCrystal);
-    
+    document.getElementById('metal-rate').textContent = `+${totalRate('metal').toFixed(1)} / 秒`;
+    document.getElementById('crystal-rate').textContent = `+${totalRate('crystal').toFixed(1)} / 秒`;
+
     const container = document.getElementById('buildings');
     container.innerHTML = '';
     Object.entries(BUILDING_DEFS).forEach(([key, def]) => {
       const level = planet[def.levelField] || 0;
+      const cost = upgradeCost(level, def);
+      const affordable = localMetal >= cost.metal && localCrystal >= cost.crystal;
+      const rate = productionRate(level, def);
+
+      let detailHtml = def.resource === 'defense' 
+        ? `防禦加成: +${level * 10} 戰力` 
+        : `目前產量 +${rate.toFixed(1)} / 秒`;
+
       const el = document.createElement('div');
       el.className = 'building';
-      el.innerHTML = `<div>${def.name} (LV ${level})</div> <button class="upgrade" onclick="upgrade('${key}')">升級</button>`;
+      el.innerHTML = `
+        <div class="b-info">
+          <div class="b-name-row">
+            <span class="b-name">${def.name}</span>
+            <span class="b-level">LV ${level}</span>
+          </div>
+          <div class="b-detail">${detailHtml}</div>
+          <div class="b-detail">
+            升級花費:
+            <span class="b-cost metal-cost">${fmt(cost.metal)} 金屬</span> ·
+            <span class="b-cost crystal-cost">${fmt(cost.crystal)} 晶體</span>
+          </div>
+        </div>
+        <button class="upgrade" ${affordable ? '' : 'disabled'} data-key="${key}">
+          升級到 LV ${level + 1}
+        </button>
+      `;
       container.appendChild(el);
     });
+
+    container.querySelectorAll('button.upgrade').forEach(btn => {
+      btn.addEventListener('click', () => upgrade(btn.dataset.key));
+    });
+
+    document.getElementById('fighter-count').textContent = fmt(planet.fighter_count);
   }
 
-  async function upgrade(key) {
-    const def = BUILDING_DEFS[key];
-    planet[def.levelField] += 1;
-    await restRequest(`planets?id=eq.${planet.id}`, { method: 'PATCH', body: JSON.stringify({ [def.levelField]: planet[def.levelField] }) });
-    render();
-  }
-
-  document.getElementById('login-btn').addEventListener('click', login);
-  
-  document.getElementById('attack-btn').addEventListener('click', async () => {
-    const targetName = document.getElementById('target-name').value;
-    const target = (await restRequest(`planets?player_name=eq.${encodeURIComponent(targetName)}&select=*`))[0];
-    const shipsSent = parseInt(document.getElementById('attack-count').value);
-    
-    // 計算防禦力：艦隊數 + (塔等級 * 10)
-    const defenderPower = target.fighter_count + ((target.laser_tower_level || 0) * 10);
-    
-    if (shipsSent > defenderPower) {
-        document.getElementById('attack-msg').textContent = '攻擊成功！';
-    } else {
-        document.getElementById('attack-msg').textContent = '攻擊失敗，對方防禦過高！';
+  document.getElementById('build-btn').addEventListener('click', async () => {
+    const countInput = document.getElementById('build-count');
+    const count = parseInt(countInput.value, 10);
+    const hint = document.getElementById('build-hint');
+    if (!count || count < 1) {
+      hint.textContent = '請輸入至少 1 艘';
+      return;
     }
+    const cost = { metal: FIGHTER_COST.metal * count, crystal: FIGHTER_COST.crystal * count };
+    if (localMetal < cost.metal || localCrystal < cost.crystal) {
+      hint.textContent = `資源不足,需要 ${fmt(cost.metal)} 金屬 · ${fmt(cost.crystal)} 晶體`;
+      return;
+    }
+    localMetal -= cost.metal;
+    localCrystal -= cost.crystal;
+    planet.fighter_count += count;
+    hint.textContent = '每艘 50 金屬 · 20 晶體';
+    render();
+    await saveToServer();
   });
 
-  document.getElementById('signout-btn').onclick = () => location.reload();
+  document.getElementById('attack-btn').addEventListener('click', attack);
+
+  async function attack() {
+    const targetName = document.getElementById('target-name').value.trim();
+    const shipsSentInput = parseInt(document.getElementById('attack-count').value, 10);
+    const msg = document.getElementById('attack-msg');
+    msg.className = 'attack-msg';
+
+    if (!targetName) {
+      msg.textContent = '請輸入對方玩家代號';
+      return;
+    }
+    if (!shipsSentInput || shipsSentInput < 1) {
+      msg.textContent = '請輸入至少派出 1 艘';
+      return;
+    }
+    if (shipsSentInput > planet.fighter_count) {
+      msg.textContent = `你只有 ${planet.fighter_count} 艘戰鬥機`;
+      return;
+    }
+
+    const attackBtn = document.getElementById('attack-btn');
+    attackBtn.disabled = true;
+    msg.textContent = '艦隊出擊中...';
+
+    try {
+      const encodedTarget = encodeURIComponent(targetName);
+      const rows = await restRequest(`planets?player_name=eq.${encodedTarget}&select=*`);
+      const defenderPlanet = rows && rows.length > 0 ? rows[0] : null;
+
+      if (!defenderPlanet) {
+        msg.textContent = '找不到這位玩家';
+        attackBtn.disabled = false;
+        return;
+      }
+      if (defenderPlanet.player_name === planet.player_name) {
+        msg.textContent = '不能攻擊自己';
+        attackBtn.disabled = false;
+        return;
+      }
+
+      const A = shipsSentInput;
+      // 防禦力 = 對方戰鬥機 + (防禦塔等級 * 10)
+      const D = defenderPlanet.fighter_count + ((defenderPlanet.laser_tower_level || 0) * 10);
+      const defenderRes = currentResourcesOf(defenderPlanet);
+
+      let attackerSurvivors, defenderRemaining, result, metalStolen = 0, crystalStolen = 0;
+
+      if (A > D) {
+        result = 'attacker_win';
+        attackerSurvivors = A - D;
+        defenderRemaining = 0;
+        metalStolen = Math.round(defenderRes.metal * STEAL_FRACTION);
+        crystalStolen = Math.round(defenderRes.crystal * STEAL_FRACTION);
+      } else if (A < D) {
+        result = 'defender_win';
+        attackerSurvivors = 0;
+        defenderRemaining = Math.max(0, defenderPlanet.fighter_count - Math.round(A * 0.5));
+      } else {
+        result = 'draw';
+        attackerSurvivors = 0;
+        defenderRemaining = Math.max(0, defenderPlanet.fighter_count - Math.round(D * 0.5));
+      }
+
+      planet.fighter_count = planet.fighter_count - A + attackerSurvivors;
+      localMetal += metalStolen;
+      localCrystal += crystalStolen;
+
+      await restRequest(`planets?id=eq.${defenderPlanet.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          metal: defenderRes.metal - metalStolen,
+          crystal: defenderRes.crystal - crystalStolen,
+          last_tick: new Date().toISOString(),
+          fighter_count: defenderRemaining,
+        }),
+      });
+
+      await restRequest('battles', {
+        method: 'POST',
+        body: JSON.stringify({
+          attacker_name: planet.player_name,
+          defender_name: defenderPlanet.player_name,
+          attacker_ships_sent: A,
+          defender_ships: D,
+          result: result,
+          metal_stolen: metalStolen,
+          crystal_stolen: crystalStolen,
+        }),
+      });
+
+      if (result === 'attacker_win') {
+        msg.textContent = `勝利!搶得 ${fmt(metalStolen)} 金屬 · ${fmt(crystalStolen)} 晶體,存活 ${attackerSurvivors} 艘`;
+        msg.className = 'attack-msg win';
+      } else if (result === 'defender_win') {
+        msg.textContent = `戰敗,派出的 ${A} 艘全數損失 (對方防禦塔發揮作用)`;
+        msg.className = 'attack-msg lose';
+      } else {
+        msg.textContent = '雙方艦隊同歸於盡';
+        msg.className = 'attack-msg';
+      }
+
+      render();
+      await saveToServer();
+      await loadBattleLog();
+      await loadGalaxyMap();
+    } catch (err) {
+      console.error('Attack error detail:', err);
+      msg.textContent = '攻擊失敗:' + ((err && err.message) || String(err));
+      msg.className = 'attack-msg lose';
+    } finally {
+      attackBtn.disabled = false;
+    }
+  }
+
+  async function loadBattleLog() {
+    if (!planet) return;
+    const container = document.getElementById('battle-log');
+    try {
+      const encodedName = encodeURIComponent(planet.player_name);
+      const rows = await restRequest(
+        `battles?or=(attacker_name.eq.${encodedName},defender_name.eq.${encodedName})&order=created_at.desc&limit=8`
+      );
+      if (!rows || rows.length === 0) {
+        container.innerHTML = '<div class="battle-empty">尚無戰鬥紀錄</div>';
+        return;
+      }
+      container.innerHTML = rows.map(b => {
+        const isAttacker = b.attacker_name === planet.player_name;
+        const won = (isAttacker && b.result === 'attacker_win') || (!isAttacker && b.result === 'defender_win');
+        const isDraw = b.result === 'draw';
+        const cls = isDraw ? '' : (won ? 'win' : 'lose');
+        const time = new Date(b.created_at).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        let line;
+        if (isAttacker) {
+          line = won
+            ? `你攻擊 ${b.defender_name},獲勝並搶得 ${fmt(b.metal_stolen)} 金屬 · ${fmt(b.crystal_stolen)} 晶體`
+            : isDraw
+              ? `你攻擊 ${b.defender_name},雙方同歸於盡`
+              : `你攻擊 ${b.defender_name},戰敗,艦隊全損`;
+        } else {
+          line = won
+            ? `你成功擊退 ${b.attacker_name} 的攻擊`
+            : isDraw
+              ? `${b.attacker_name} 攻擊了你,雙方同歸於盡`
+              : `${b.attacker_name} 攻擊了你,你損失 ${fmt(b.metal_stolen)} 金屬 · ${fmt(b.crystal_stolen)} 晶體`;
+        }
+        return `<div class="battle-entry ${cls}"><div>${line}</div><div class="b-time">${time}</div></div>`;
+      }).join('');
+    } catch (err) {
+      console.error('Battle log error:', err);
+    }
+  }
 </script>
 </body>
 </html>
