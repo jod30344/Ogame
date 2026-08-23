@@ -21,6 +21,7 @@
     --explore: #b38cf0;
     --core: #ffd166;
     --automation: #5fd0e0;
+    --colonize: #ff8fc4;
   }
   * { box-sizing: border-box; }
   body {
@@ -451,6 +452,7 @@
     animation: pulseWarn 2s ease-in-out infinite;
   }
   .movement-entry.outgoing { border-left: 3px solid var(--metal); }
+  .movement-entry.colonize { border-left: 3px solid var(--colonize); }
   .movement-eta { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
   .movement-entry.incoming .movement-eta { color: var(--warn); }
   @keyframes pulseWarn {
@@ -562,6 +564,10 @@
   .modal-cancel:hover { border-color: var(--text-dim); }
   .modal-confirm { background: var(--warn); border-color: var(--warn); color: #2a0e0e; }
   .modal-confirm:hover { opacity: 0.9; }
+  #colonize-modal .modal-box { max-width: 400px; }
+  #colonize-modal .modal-confirm { background: var(--colonize); border-color: var(--colonize); color: #2a0e1a; }
+  .colonize-form-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
+  .colonize-intro { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px; }
 
   /* Planet switcher */
   .planet-switcher { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
@@ -641,6 +647,7 @@
   .fleet-chip.away { border-color: var(--warn); color: var(--warn); }
   .fleet-chip.exploring { border-color: var(--explore); color: var(--explore); }
   .fleet-chip.building { border-color: var(--crystal); color: var(--crystal); }
+  .fleet-chip.colonizing { border-color: var(--colonize); color: var(--colonize); }
   .fleet-chip.total { border-color: var(--line); background: var(--bg-deep); color: var(--text-main); font-weight: 700; }
 
   /* Building icons on plot cards */
@@ -759,6 +766,43 @@
     <div class="modal-actions">
       <button class="modal-cancel" id="confirm-modal-cancel" type="button">取消</button>
       <button class="modal-confirm" id="confirm-modal-ok" type="button">派出艦隊</button>
+    </div>
+  </div>
+</div>
+
+<!-- 殖民艦隊派遣 — 距離換算航程,玩家自選攜帶艦隊與物資(可留空輕裝出發)。 -->
+<div class="modal-overlay hidden" id="colonize-modal">
+  <div class="modal-box">
+    <div class="modal-title">確認殖民</div>
+    <div class="modal-body">
+      <div class="colonize-intro" id="colonize-modal-intro"></div>
+      <div class="colonize-form-grid">
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-scout">偵察機</label>
+          <input type="number" class="ship-input" id="colonize-scout" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-fighter">戰鬥機</label>
+          <input type="number" class="ship-input" id="colonize-fighter" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-transport">運輸艦</label>
+          <input type="number" class="ship-input" id="colonize-transport" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-metal">攜帶金屬</label>
+          <input type="number" class="ship-input" id="colonize-metal" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-crystal">攜帶晶體</label>
+          <input type="number" class="ship-input" id="colonize-crystal" min="0" value="0">
+        </div>
+      </div>
+      <div class="attack-msg" id="colonize-modal-msg"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="colonize-modal-cancel" type="button">取消</button>
+      <button class="modal-confirm" id="colonize-modal-ok" type="button">出發殖民</button>
     </div>
   </div>
 </div>
@@ -1134,7 +1178,7 @@
   //   - `knownPlanetRows` is the player's known-planets registry. A 'player'
   //     -type entry is never deleted, so it alone would be a permanent
   //     "has ever discovered" signal — but an 'empty'-type entry IS deleted
-  //     the moment it's colonized (see colonizeKnownPlanet()), which would
+  //     the moment it's colonized (see resolveOneColonization()), which would
   //     otherwise let a player's VERY FIRST discovery (if it was an empty,
   //     immediately-colonized coordinate) wrongly reset this back to "never
   //     discovered." OR-ing in myPlanets.length > 1 closes that gap: you
@@ -1312,7 +1356,13 @@
       const away = fleetAwayCount(type);
       const exploring = fleetExploringCount(type);
       const building = fleetBuildingCount(type);
-      return sum + home + away + exploring + building;
+      // In-flight colonization missions launched from this planet — ships
+      // committed to them are gone for good (they become the new colony's
+      // starting fleet on arrival, they don't return here), but while still
+      // en route they still count against THIS planet's total/cap, the same
+      // way away/exploring/building already do. See fleetColonizingCount().
+      const colonizing = fleetColonizingCount(type);
+      return sum + home + away + exploring + building + colonizing;
     }, 0);
   }
 
@@ -1567,6 +1617,7 @@
   let explorationRows = [];    // in-flight explorations/recon launched from this planet
   let explorationLog = [];     // resolved explorations (history) for this planet's owner
   let knownPlanetRows = [];    // this player's known-planets registry (player-wide, not per-planet)
+  let colonizationRows = [];   // in-flight (unresolved) colonization missions launched from this planet
 
   let localMetal = 0;
   let localCrystal = 0;
@@ -1677,25 +1728,26 @@
 
   // Shared chip row builder — one visual language for "where are my ships"
   // used both in the top sticky bar and the detail card further down.
-  function fleetStatusChipsHtml(home, away, exploring, building, opts) {
+  function fleetStatusChipsHtml(home, away, exploring, building, colonizing, opts) {
     opts = opts || {};
     let chips = '';
     if (opts.includeHome) chips += `<span class="fleet-chip home">在家 ${fmt(home)}</span>`;
     if (away > 0) chips += `<span class="fleet-chip away">出征 ${fmt(away)}</span>`;
     if (exploring > 0) chips += `<span class="fleet-chip exploring">探索 ${fmt(exploring)}</span>`;
     if (building > 0) chips += `<span class="fleet-chip building">建造 ${fmt(building)}</span>`;
-    if (opts.includeTotal) chips += `<span class="fleet-chip total">共 ${fmt(home + away + exploring + building)}</span>`;
+    if (colonizing > 0) chips += `<span class="fleet-chip colonizing">殖民中 ${fmt(colonizing)}</span>`;
+    if (opts.includeTotal) chips += `<span class="fleet-chip total">共 ${fmt(home + away + exploring + building + colonizing)}</span>`;
     return chips;
   }
 
-  function fleetTypeBlockHtml(icon, name, home, away, exploring, building) {
-    const total = home + away + exploring + building;
+  function fleetTypeBlockHtml(icon, name, home, away, exploring, building, colonizing) {
+    const total = home + away + exploring + building + colonizing;
     return `<div class="fleet-type-block">
       <div class="fleet-type-head">
         <span class="fleet-type-name">${icon}${name}</span>
         <span class="fleet-type-total">共 ${fmt(total)}</span>
       </div>
-      <div class="fleet-status-chips">${fleetStatusChipsHtml(home, away, exploring, building, { includeHome: true })}</div>
+      <div class="fleet-status-chips">${fleetStatusChipsHtml(home, away, exploring, building, colonizing, { includeHome: true })}</div>
     </div>`;
   }
   function renderFleetTopBar() {
@@ -1705,7 +1757,7 @@
     gridEl.innerHTML = Object.keys(SHIP_TYPES).map(type => {
       const def = SHIP_TYPES[type];
       const home = planet[`${type}_count`] || 0;
-      return fleetTypeBlockHtml(SHIP_ICONS[type] || '', def.name, home, fleetAwayCount(type), fleetExploringCount(type), fleetBuildingCount(type));
+      return fleetTypeBlockHtml(SHIP_ICONS[type] || '', def.name, home, fleetAwayCount(type), fleetExploringCount(type), fleetBuildingCount(type), fleetColonizingCount(type));
     }).join('');
 
     // Top-right combined total vs. cap — reuses the exact same two numbers
@@ -2047,6 +2099,7 @@
     pendingOutgoingTransports = [];
     explorationRows = [];
     explorationLog = [];
+    colonizationRows = [];
     seenIncomingMissionIds = new Set();
     seenIncomingTransportIds = new Set();
     caughtUpPlanetIds = new Set();
@@ -2107,6 +2160,7 @@
     pendingOutgoingTransports = [];
     explorationRows = [];
     explorationLog = [];
+    colonizationRows = [];
     seenIncomingMissionIds = new Set();
     localMetal = Number(planet.metal);
     localCrystal = Number(planet.crystal);
@@ -2165,6 +2219,8 @@
     await resolveArrivedExplorations();
     await loadExplorationData();
     await loadKnownPlanets();
+    await resolveArrivedColonizations();
+    await loadColonizationMissions();
     await loadPendingTransportRequests();
   }
 
@@ -3663,12 +3719,34 @@
   function renderMovementLog() {
     if (!planet) return;
     const container = document.getElementById('movement-log');
-    if (cachedMissions.length === 0) {
+    if (cachedMissions.length === 0 && colonizationRows.length === 0) {
       container.innerHTML = '<div class="battle-empty">目前沒有艦隊在途中</div>';
       renderFleetOverview();
       return;
     }
-    container.innerHTML = cachedMissions.map(m => {
+    // Colonization missions listed first — they're always outgoing from THIS
+    // planet (colonizationRows is scoped to origin_planet_id=eq.${planet.id},
+    // same pattern as explorationRows), so there's no incoming/outgoing split
+    // to handle the way fleet_missions needs.
+    const colonizeEntries = colonizationRows.map(m => {
+      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
+      const shipParts = [];
+      if (m.scout_ships_sent) shipParts.push(`偵察機 ${fmt(m.scout_ships_sent)}`);
+      if (m.fighter_ships_sent) shipParts.push(`戰鬥機 ${fmt(m.fighter_ships_sent)}`);
+      if (m.transport_ships_sent) shipParts.push(`運輸艦 ${fmt(m.transport_ships_sent)}`);
+      const shipsText = shipParts.length > 0 ? shipParts.join('、') : '輕裝(無艦隊)';
+      const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0)
+        ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體`
+        : '';
+      const label = `殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}`;
+      return `<div class="movement-entry colonize">
+        <div>${label}</div>
+        <div class="movement-eta">${etaText}</div>
+      </div>`;
+    }).join('');
+
+    const missionEntries = cachedMissions.map(m => {
       const isOutgoing = m.attacker_name === planet.player_name;
       const isTransport = m.mission_type === 'transport';
       const count = isTransport ? m.transport_ships_sent : (m.fighter_ships_sent || m.ships_sent);
@@ -3692,6 +3770,7 @@
       </div>`;
     }).join('');
 
+    container.innerHTML = colonizeEntries + missionEntries;
     renderFleetOverview();
   }
 
@@ -4431,9 +4510,20 @@
       const lootLine = (m.loot_metal > 0 || m.loot_crystal > 0)
         ? `帶回 ${fmt(m.loot_metal)} 金屬 · ${fmt(m.loot_crystal)} 晶體`
         : '這趟沒有帶回任何戰利品';
+      // A colonization mission launched from THIS log entry is only marked
+      // `claimed` once it actually ARRIVES (resolveOneColonization()), not at
+      // launch time — now that colonizing takes real travel time, without
+      // this check the colonize button would keep reappearing on the same
+      // log entry for the whole flight and let the player accidentally
+      // launch a second, redundant colonization mission to the same coord.
+      const pendingColonize = colonizationRows.find(c => c.source_exploration_id === m.id);
       let extra = '';
       if (isRare && m.claimed) {
         extra = `<div class="log-loot">已殖民座標 ${m.found_coord}</div>`;
+      } else if (isRare && pendingColonize) {
+        const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
+        const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
+        extra = `<div class="log-loot">殖民艦隊正飛往座標 ${m.found_coord},${etaText}</div>`;
       } else if (isRare && m.found_type === 'player') {
         // Occupied coordinates can't be colonized directly — they're routed
         // to the known-planets list instead, where 偵查/運輸/侵略 apply.
@@ -4456,41 +4546,7 @@
   }
 
   function onColonizeClick(explorationId, coord, btn) {
-    openConfirmModal(
-      '確認殖民',
-      `確定要在座標 ${coord} 建立新的殖民地嗎？這會成為你的新星球,可以在上方切換管理,從零開始建設。`,
-      '確認殖民',
-      () => colonizePlanet(explorationId, coord, btn)
-    );
-  }
-
-  async function colonizePlanet(explorationId, coord, btn) {
-    if (btn) btn.disabled = true;
-    try {
-      const created = await restRequest('planets', {
-        method: 'POST',
-        // New colonies start at true zero besides their own homestead's
-        // trickle — no bootstrap discount just for already having an empire.
-        body: JSON.stringify({ player_name: planet.player_name, coord, metal: 0, crystal: 0 }),
-      });
-      const newPlanet = created && created[0];
-      if (newPlanet) await seedHomestead(newPlanet.id);
-      await restRequest(`exploration_missions?id=eq.${explorationId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ claimed: true }),
-      });
-      if (newPlanet) {
-        myPlanets = [...myPlanets, newPlanet];
-        renderPlanetSwitcher();
-        showToast(`殖民成功！新星球位於座標 ${coord}`, 'success', 8000);
-      }
-      await loadExplorationData();
-    } catch (err) {
-      console.error('Colonize error:', err);
-      showToast('殖民失敗:' + ((err && err.message) || String(err)), 'danger');
-    } finally {
-      if (btn) btn.disabled = false;
-    }
+    openColonizeModal(coord, explorationId);
   }
 
   // ============================================================
@@ -4580,8 +4636,21 @@
         ? `<button class="max-btn" data-transport-to="${kp.target_player_name}" type="button">運輸</button>` : '';
       const invadeBtn = kp.target_type === 'player'
         ? `<button class="attack-btn" data-invade-to="${kp.target_player_name}" type="button">侵略</button>` : '';
-      const colonizeBtn = kp.target_type === 'empty'
-        ? `<button class="upgrade" data-colonize-known="${kp.coord}" type="button">殖民</button>` : '';
+      // Same double-launch guard as the exploration log: a colonization
+      // mission targeting this coordinate stays in colonizationRows (and
+      // this known_planets row stays around) for the whole flight, only
+      // resolving — and deleting this row — on arrival. Without checking
+      // for an already-in-flight mission here, the 殖民 button would keep
+      // showing and let the player launch a second one to the same coord.
+      const pendingColonize = colonizationRows.find(c => c.target_coord === kp.coord);
+      let colonizeBtn = '';
+      if (kp.target_type === 'empty' && pendingColonize) {
+        const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
+        const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
+        colonizeBtn = `<div class="log-loot">殖民艦隊已出發,${etaText}</div>`;
+      } else if (kp.target_type === 'empty') {
+        colonizeBtn = `<button class="upgrade" data-colonize-known="${kp.coord}" type="button">殖民</button>`;
+      }
       return `<div class="explore-log-entry">
         <div class="log-text">座標 ${kp.coord} · ${typeLabel}</div>
         <div class="log-loot">${intelLine}</div>
@@ -4676,43 +4745,208 @@
   }
 
   function onColonizeKnownClick(coord, btn) {
-    openConfirmModal(
-      '確認殖民',
-      `確定要在座標 ${coord} 建立新的殖民地嗎?這會成為你的新星球,可以在上方切換管理,從零開始建設。`,
-      '確認殖民',
-      () => colonizeKnownPlanet(coord, btn)
-    );
+    openColonizeModal(coord, null);
   }
 
-  // Parallel to colonizePlanet() but reached from the persistent known-planets
-  // list rather than one specific exploration mission's claimed flag — on
-  // success it deletes the known_planets row instead of marking a mission
-  // claimed, since the coordinate is now the player's own colony, not an
-  // external "known" target any more.
-  async function colonizeKnownPlanet(coord, btn) {
-    if (btn) btn.disabled = true;
+  // ============================================================
+  // 殖民艦隊派遣 (Colonization missions) — per explicit user request,
+  // colonizing a discovered/known coordinate is no longer instant. It now
+  // travels like every other mission in this game (recon, transport,
+  // exploration), using the SAME distance-based travel-time formula
+  // (travelSeconds(), shared with recon/transport — "座標之間的距離" per the
+  // user's own suggestion), and the player explicitly chooses how many ships
+  // of each type and how much metal/crystal to commit, instead of the old
+  // flow which just created a same-instant, resource-empty new planet.
+  // Sending 0 ships and 0 resources remains fully valid (matches the user's
+  // explicit note that a completely unequipped landing "也是一種玩法") — it's
+  // just no longer the ONLY option, and it still takes the travel time.
+  //
+  // Whatever is committed does NOT return to the origin planet the way a
+  // transport mission's ships do — it's a one-way trip that becomes the new
+  // colony's STARTING fleet/resources. While in flight, the committed ships
+  // are excluded from the origin planet's "home" count via a dedicated
+  // fleetColonizingCount() tally (see currentFleetTotal()), the same pattern
+  // already used for away/exploring/building — never actually decremented
+  // from planet.scout_count/etc, exactly like every other away-fleet state.
+  // ============================================================
+
+  let pendingColonizeContext = null; // { coord, explorationId }
+
+  function openColonizeModal(coord, explorationId) {
+    pendingColonizeContext = { coord, explorationId: explorationId || null };
+    const travelSec = travelSeconds(planet.coord, coord);
+    document.getElementById('colonize-modal-intro').textContent =
+      `確定要在座標 ${coord} 建立新的殖民地嗎?距離約需航程 ${formatDuration(travelSec)}。下方選擇要攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航;也可以全部留 0,輕裝出發。`;
+    ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal'].forEach(id => {
+      document.getElementById(id).value = 0;
+    });
+    const msg = document.getElementById('colonize-modal-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    document.getElementById('colonize-modal').classList.remove('hidden');
+  }
+
+  function closeColonizeModal() {
+    pendingColonizeContext = null;
+    document.getElementById('colonize-modal').classList.add('hidden');
+  }
+
+  document.getElementById('colonize-modal-cancel').addEventListener('click', closeColonizeModal);
+  document.getElementById('colonize-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'colonize-modal') closeColonizeModal();
+  });
+  document.getElementById('colonize-modal-ok').addEventListener('click', async () => {
+    if (!pendingColonizeContext) return;
+    const scout = parseInt(document.getElementById('colonize-scout').value, 10) || 0;
+    const fighter = parseInt(document.getElementById('colonize-fighter').value, 10) || 0;
+    const transport = parseInt(document.getElementById('colonize-transport').value, 10) || 0;
+    const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-metal').value) || 0));
+    const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-crystal').value) || 0));
+    const msg = document.getElementById('colonize-modal-msg');
+    msg.className = 'attack-msg';
+
+    if (scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (scout > (planet.scout_count || 0)) { msg.textContent = `你在家只有 ${planet.scout_count || 0} 艘偵察機`; return; }
+    if (fighter > (planet.fighter_count || 0)) { msg.textContent = `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機`; return; }
+    if (transport > (planet.transport_count || 0)) { msg.textContent = `你在家只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
+    if (metal > localMetal) { msg.textContent = `金屬不足,目前只有 ${fmt(localMetal)}`; return; }
+    if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
+
+    const { coord, explorationId } = pendingColonizeContext;
+    const okBtn = document.getElementById('colonize-modal-ok');
+    okBtn.disabled = true;
     try {
-      const created = await restRequest('planets', {
-        method: 'POST',
-        body: JSON.stringify({ player_name: planet.player_name, coord, metal: 0, crystal: 0 }),
-      });
-      const newPlanet = created && created[0];
-      if (newPlanet) await seedHomestead(newPlanet.id);
-      await restRequest(
-        `known_planets?owner_player_name=eq.${encodeURIComponent(planet.player_name)}&coord=eq.${coord}`,
-        { method: 'DELETE' }
-      );
-      if (newPlanet) {
-        myPlanets = [...myPlanets, newPlanet];
-        renderPlanetSwitcher();
-        showToast(`殖民成功!新星球位於座標 ${coord}`, 'success', 8000);
-      }
-      await loadKnownPlanets();
+      await launchColonization(coord, explorationId, { scout, fighter, transport, metal, crystal });
+      closeColonizeModal();
     } catch (err) {
-      console.error('Colonize known planet error:', err);
-      showToast('殖民失敗:' + ((err && err.message) || String(err)), 'danger');
+      console.error('Launch colonization error:', err);
+      msg.textContent = '殖民艦隊派遣失敗:' + ((err && err.message) || String(err));
     } finally {
-      if (btn) btn.disabled = false;
+      okBtn.disabled = false;
+    }
+  });
+
+  async function launchColonization(coord, explorationId, { scout, fighter, transport, metal, crystal }) {
+    const travelSec = travelSeconds(planet.coord, coord);
+    const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
+
+    // Optimistically deduct committed resources now, same as every other
+    // resource-committing action (build/produce/transport) — ships are
+    // deliberately NOT deducted from planet.*_count; see the design-note
+    // comment above this section for why.
+    if (metal > 0 || crystal > 0) {
+      localMetal -= metal;
+      localCrystal -= crystal;
+      renderResources();
+      if (metal > 0) flashResource('metal-value', 'danger');
+      if (crystal > 0) flashResource('crystal-value', 'danger');
+      await saveToServer();
+    }
+
+    await restRequest('colonization_missions', {
+      method: 'POST',
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        origin_planet_id: planet.id,
+        target_coord: coord,
+        scout_ships_sent: scout,
+        fighter_ships_sent: fighter,
+        transport_ships_sent: transport,
+        metal_sent: metal,
+        crystal_sent: crystal,
+        launched_at: new Date().toISOString(),
+        arrival_time: arrivalTime,
+        resolved: false,
+        source_exploration_id: explorationId || null,
+      }),
+    });
+
+    showToast(`殖民艦隊已出發前往座標 ${coord},預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    await loadColonizationMissions();
+    renderFleetTopBar();
+    // Re-render both possible launch points immediately (not just on the
+    // next poll cycle) so the just-launched coordinate's colonize button
+    // switches to the in-flight status line right away — otherwise it would
+    // keep showing for up to one poll interval, inviting an accidental
+    // double-launch to the same coordinate.
+    renderExplorationLog();
+    renderKnownPlanets();
+  }
+
+  async function loadColonizationMissions() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(`colonization_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&order=launched_at.asc`);
+      colonizationRows = rows || [];
+      renderMovementLog();
+    } catch (err) {
+      console.error('Load colonization missions error:', err);
+    }
+  }
+
+  function fleetColonizingCount(shipType) {
+    const field = `${shipType}_ships_sent`;
+    return colonizationRows.reduce((sum, r) => sum + (r[field] || 0), 0);
+  }
+
+  async function resolveArrivedColonizations() {
+    if (!planet) return;
+    try {
+      const nowIso = new Date().toISOString();
+      const rows = await restRequest(
+        `colonization_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&arrival_time=lte.${encodeURIComponent(nowIso)}`
+      );
+      if (!rows || rows.length === 0) return;
+      for (const mission of rows) await resolveOneColonization(mission);
+    } catch (err) {
+      console.error('Resolve colonizations error:', err);
+    }
+  }
+
+  async function resolveOneColonization(mission) {
+    // Same claim-race-safe CAS pattern as resolveOneExploration(): only the
+    // caller whose PATCH actually flips resolved false->true (and gets a
+    // non-empty result back) proceeds to create the new planet — guards
+    // against two open tabs/devices both trying to resolve the same arrival.
+    const claimed = await restRequest(`colonization_missions?id=eq.${mission.id}&resolved=eq.false`, {
+      method: 'PATCH',
+      body: JSON.stringify({ resolved: true }),
+    });
+    if (!claimed || claimed.length === 0) return;
+
+    const created = await restRequest('planets', {
+      method: 'POST',
+      body: JSON.stringify({
+        player_name: mission.player_name,
+        coord: mission.target_coord,
+        metal: mission.metal_sent || 0,
+        crystal: mission.crystal_sent || 0,
+        scout_count: mission.scout_ships_sent || 0,
+        fighter_count: mission.fighter_ships_sent || 0,
+        transport_count: mission.transport_ships_sent || 0,
+      }),
+    });
+    const newPlanet = created && created[0];
+    if (newPlanet) await seedHomestead(newPlanet.id);
+
+    if (mission.source_exploration_id) {
+      await restRequest(`exploration_missions?id=eq.${mission.source_exploration_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ claimed: true }),
+      });
+    }
+    // Always also attempt to clear a matching known_planets row — a harmless
+    // no-op if this coordinate was never in the registry (e.g. launched
+    // straight from an exploration log entry rather than the known list).
+    await restRequest(
+      `known_planets?owner_player_name=eq.${encodeURIComponent(mission.player_name)}&coord=eq.${mission.target_coord}`,
+      { method: 'DELETE' }
+    );
+
+    if (newPlanet) {
+      myPlanets = [...myPlanets, newPlanet];
+      renderPlanetSwitcher();
+      showToast(`殖民成功!新星球位於座標 ${mission.target_coord}`, 'success', 8000);
     }
   }
 
