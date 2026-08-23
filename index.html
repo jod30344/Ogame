@@ -2248,12 +2248,6 @@
     await resolveShipQueue();
     await advanceQueue();
     await loadShipQueue();
-    // 自動生產艦隊: refill any auto-producing ship type whose last batch just
-    // finished (loadShipQueue() above no longer shows it as outstanding).
-    // Re-loading afterward means a batch queued this tick shows up in the
-    // production display immediately, instead of waiting for the next poll.
-    await maybeAutoQueueProduction();
-    await loadShipQueue();
     await resolveArrivedMissions();
     await loadFleetMovements();
     await loadBattleLog();
@@ -2263,6 +2257,33 @@
     await resolveArrivedColonizations();
     await loadColonizationMissions();
     await loadPendingTransportRequests();
+    // BUG FIX (reported by the user via a screen recording showing 總數
+    // 712/600 jump to 742/600 immediately after a page refresh): this call
+    // used to sit much earlier in this function, right after loadShipQueue().
+    // `autoQueueBatch()` decides whether there's fleet-cap room by calling
+    // currentFleetTotal(), which sums home + away (cachedMissions) +
+    // exploring (explorationRows) + building (shipQueueRows) + colonizing
+    // (colonizationRows). On the very FIRST poll after login or switching
+    // planets, cachedMissions/explorationRows/colonizationRows have all just
+    // been reset to [] and aren't repopulated until loadFleetMovements() /
+    // loadExplorationData() / loadColonizationMissions() run — which, at the
+    // old call position, happened AFTER maybeAutoQueueProduction() already
+    // ran. So that first check saw an artificially low total (only home +
+    // building ships counted, e.g. 158 instead of the real 712) and happily
+    // queued a fresh batch for every auto-producing ship type, even though
+    // the real fleet was already well over cap — reproduced exactly: seeding
+    // a planet at 712/600 (over cap) and simulating a fresh
+    // login/plane-switch poll cycle correctly refused to queue anything once
+    // this call moved after all the other loaders, but queued 3 fresh
+    // batches (+30 ships) when tested against the old ordering. Refill any
+    // auto-producing ship type whose last batch just finished
+    // (loadShipQueue() above no longer shows it as outstanding) now that
+    // every fleet-affecting data source for this planet has been freshly
+    // loaded/reconciled this cycle. Re-loading once more afterward means a
+    // batch queued this tick shows up in the production display immediately,
+    // instead of waiting for the next poll.
+    await maybeAutoQueueProduction();
+    await loadShipQueue();
   }
 
   // Gate offline catch-up per planet id (not a single global flag) so
