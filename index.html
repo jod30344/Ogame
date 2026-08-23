@@ -1112,10 +1112,11 @@
   //     so reaching it requires having actually expanded beyond the first
   //     colony.
   // Per user's explicit request, LV2→3 and LV3→4's requirement text is HIDDEN
-  // as "???" on the card until met (not even the buildings/resource-cost
-  // numbers are affected — just the requirement line itself), then reveals
-  // the specific thing that was achieved once it's true. This is a deliberate
-  // asymmetry from LV1→2, which stays a plain visible counter throughout.
+  // as a labeled `待突破條件 : ???` placeholder on the card until met (not
+  // even the buildings/resource-cost numbers are affected — just the
+  // requirement line itself), then reveals the specific thing that was
+  // achieved once it's true. This is a deliberate asymmetry from LV1→2,
+  // which stays a plain visible counter throughout.
   const HOMESTEAD_MIN_OTHER_BUILDINGS_PER_LEVEL = 1;
   function homesteadMinOtherBuildings(targetLevel) {
     return Math.max(0, (targetLevel - 1) * HOMESTEAD_MIN_OTHER_BUILDINGS_PER_LEVEL);
@@ -2584,8 +2585,10 @@
     // resources — each transition has its own curated requirement (see the
     // comment above homesteadMinOtherBuildings()/everDiscoveredAnyPlanet()/
     // everColonizedAnyPlanet()). LV1→2 stays a plain visible counter; LV2→3
-    // and LV3→4 show "???" until met, per user's explicit request to keep
-    // those two a surprise, then reveal exactly what was achieved.
+    // and LV3→4 show a labeled `待突破條件 : ???` placeholder until met (a
+    // bare "???" read as too vague/unclear on its own — per user feedback,
+    // the label makes clear this IS a requirement line, just not revealed
+    // yet), then reveal exactly what was achieved.
     let requirementMet;
     let reqLine;
     if (targetLevel === 2) {
@@ -2597,12 +2600,12 @@
       requirementMet = everDiscoveredAnyPlanet();
       reqLine = requirementMet
         ? `<div class="plot-detail">已透過探索發現星球 ✓</div>`
-        : `<div class="plot-detail unmet">???</div>`;
+        : `<div class="plot-detail unmet">待突破條件 : ???</div>`;
     } else if (targetLevel === 4) {
       requirementMet = everColonizedAnyPlanet();
       reqLine = requirementMet
         ? `<div class="plot-detail">已完成星球殖民 ✓</div>`
-        : `<div class="plot-detail unmet">???</div>`;
+        : `<div class="plot-detail unmet">待突破條件 : ???</div>`;
     } else {
       requirementMet = true;
       reqLine = '';
