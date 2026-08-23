@@ -2148,10 +2148,51 @@
   // Switching planets keeps the same login session (tick/save/poll intervals
   // keep running) but points every planet-scoped cache at the newly active
   // planet and lets the next poll cycle repopulate everything for it.
-  function switchToPlanet(p) {
+  async function switchToPlanet(p) {
     if (!p) return;
     if (planet && String(planet.id) === String(p.id)) { renderPlanetSwitcher(); return; }
-    planet = p;
+
+    // BUG FIX (two-part — reported by the user via a screen recording showing
+    // metal/crystal correctly accrue to 72/45 while viewing a colony, then
+    // drop back down to single digits after switching away and back):
+    //
+    // 1) `myPlanets[i]` for a planet that ISN'T the currently-active one is
+    //    NEVER kept up to date — `localMetal`/`localCrystal` (the live,
+    //    ticking numbers actually shown on screen) are separate variables
+    //    that get PATCHed to the SERVER via saveToServer(), but nothing ever
+    //    writes them back into the `planet`/`myPlanets` object itself. So the
+    //    cached object's own `.metal`/`.crystal`/`.last_tick` fields stay
+    //    frozen at whatever they were the moment this planet was first
+    //    loaded into `myPlanets` — reading them again on a later revisit
+    //    (the old `localMetal = Number(planet.metal)` line below) silently
+    //    discards everything that accrued since. Fixed by re-fetching this
+    //    planet's row fresh from the server on every switch, and refreshing
+    //    the cached `myPlanets` entry with it, rather than trusting whatever
+    //    (possibly very stale) object reference was passed in.
+    // 2) catchUpOfflineResources() only ever runs ONCE per planet id for the
+    //    whole session (see its own `caughtUpPlanetIds` guard) — that guard
+    //    exists to stop it from double-crediting production on EVERY poll
+    //    cycle while a planet stays continuously active (ordinary accrual
+    //    during a continuous view is handled by the local tick() interval
+    //    instead). But that also wrongly blocks it from running again on a
+    //    REVISIT, when a fresh catch-up is exactly what's needed to credit
+    //    whatever accrued server-side (via saveToServer()) while this planet
+    //    sat in the background. Cleared here so the very next poll's
+    //    catch-up genuinely re-runs for this planet.
+    let fresh = p;
+    try {
+      const rows = await restRequest(`planets?id=eq.${p.id}&select=*`);
+      if (rows && rows[0]) {
+        fresh = rows[0];
+        const idx = myPlanets.findIndex(mp => String(mp.id) === String(p.id));
+        if (idx >= 0) myPlanets[idx] = fresh;
+      }
+    } catch (err) {
+      console.error('Refresh planet on switch error:', err);
+    }
+    caughtUpPlanetIds.delete(fresh.id);
+
+    planet = fresh;
     ownBuildings = [];
     constructionRows = [];
     shipQueueRows = [];
