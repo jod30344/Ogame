@@ -4830,18 +4830,35 @@
     const travelSec = travelSeconds(planet.coord, coord);
     const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
 
-    // Optimistically deduct committed resources now, same as every other
-    // resource-committing action (build/produce/transport) — ships are
-    // deliberately NOT deducted from planet.*_count; see the design-note
-    // comment above this section for why.
-    if (metal > 0 || crystal > 0) {
-      localMetal -= metal;
-      localCrystal -= crystal;
-      renderResources();
-      if (metal > 0) flashResource('metal-value', 'danger');
-      if (crystal > 0) flashResource('crystal-value', 'danger');
-      await saveToServer();
-    }
+    // Optimistically deduct committed resources AND ships now, same pattern
+    // as every other mission type (launchExploration/launchRecon/attack/
+    // transport): planet.{type}_count only ever represents ships still
+    // physically at home, so committing ships to ANY mission decrements it
+    // immediately at launch — the "away"/"exploring"/"colonizing" tallies
+    // (fleetAwayCount()/fleetExploringCount()/fleetColonizingCount()) are
+    // what add the in-flight ships back on top of that reduced home count,
+    // in currentFleetTotal(), to reconstruct the true combined total.
+    //
+    // BUG FIX: this function used to deliberately leave ships un-deducted
+    // here ("tracked via mission row, not decremented"), which double-
+    // counted every committed ship — once still sitting in planet.
+    // {type}_count (never reduced), and again via fleetColonizingCount()
+    // (which also counts it as in-flight) — inflating currentFleetTotal()
+    // by exactly the committed fleet size, and in turn letting 自動生產
+    // keep queueing new batches using an artificially-lower cap headroom
+    // reading than the artificially-inflated total should have allowed.
+    // Reported by the user via a screenshot showing 總數 685 / 600, which
+    // traced back to exactly this: 685 = 600 (home, unchanged) + 85
+    // (committed ships double-counted through the colonizing bucket).
+    planet.scout_count = (planet.scout_count || 0) - scout;
+    planet.fighter_count = (planet.fighter_count || 0) - fighter;
+    planet.transport_count = (planet.transport_count || 0) - transport;
+    localMetal -= metal;
+    localCrystal -= crystal;
+    renderResources();
+    if (metal > 0) flashResource('metal-value', 'danger');
+    if (crystal > 0) flashResource('crystal-value', 'danger');
+    await saveToServer();
 
     await restRequest('colonization_missions', {
       method: 'POST',
@@ -4924,6 +4941,14 @@
         scout_count: mission.scout_ships_sent || 0,
         fighter_count: mission.fighter_ships_sent || 0,
         transport_count: mission.transport_ships_sent || 0,
+        // Explicit, not relied on as a DB default: every other place in this
+        // file that sets metal/crystal to an absolute value also stamps
+        // last_tick alongside it (see saveToServer() and the mission-loot
+        // resolution sites), so catchUpOfflineResources()/tick() compute
+        // elapsed production from the moment these starting resources were
+        // actually granted, not from whatever (possibly null/very old)
+        // timestamp the row would otherwise be left with.
+        last_tick: new Date().toISOString(),
       }),
     });
     const newPlanet = created && created[0];
