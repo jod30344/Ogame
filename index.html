@@ -1595,6 +1595,25 @@
   const DEMOLISH_TIME_FRACTION = 0.5;
   const MIN_DEMOLISH_SECONDS = 20;
 
+  // Cancelling a construction_queue order (upgrade OR demolish, either still
+  // "queued" or already "building") — per explicit user request, added after
+  // they pointed out there was no way to back out of a plot 格 they queued up
+  // by mistake or changed their mind about. Refund policy, per explicit user
+  // choice: a QUEUED order (no work started yet) refunds its full cost; a
+  // BUILDING order (already mid-construction, progress bar showing) only
+  // refunds half — the other half is treated as sunk cost for the work
+  // already underway, same "cancelling isn't free" friction philosophy as
+  // demolishing itself (see DEMOLISH_COST_FRACTION above). Ship production
+  // orders already had their own cancel button (onCancelOrderClick/
+  // cancelShipOrder below) with a *different* policy — 100% of whatever
+  // hasn't been credited yet — which makes sense there because ships credit
+  // incrementally as each one finishes, so "remaining count" already nets
+  // out the completed portion; a building/demolish job has no partial
+  // credit (it's all-or-nothing at complete_at), so a flat 50% is the
+  // closest equivalent for "you get back roughly what you haven't burned
+  // through yet."
+  const CONSTRUCTION_CANCEL_BUILDING_REFUND_FRACTION = 0.5;
+
   function buildingCost(type, targetLevel) {
     const def = BUILDING_TYPES[type];
     const growth = UNIQUE_BUILDING_COST_GROWTH[type] || COST_GROWTH;
@@ -1611,6 +1630,20 @@
   }
   function demolishSeconds(type, level) {
     return Math.max(MIN_DEMOLISH_SECONDS, Math.round(buildingSeconds(type, level) * DEMOLISH_TIME_FRACTION));
+  }
+  // What was actually paid to queue a construction_queue row, recovered from
+  // the row's own stored fields — no extra "cost paid" column needed. An
+  // upgrade order (target_level > 0) paid buildingCost(type, target_level).
+  // A demolish order (the target_level === 0 sentinel) paid
+  // demolishCost(type, <level being torn down>) — that level isn't stored on
+  // the row itself, but the building it's demolishing is still sitting in
+  // ownBuildings (untouched) right up until resolveConstruction() actually
+  // deletes it on completion, so its current .level is exactly the value
+  // demolishCost was computed from at queue time.
+  function constructionOrderCost(row) {
+    if (row.target_level > 0) return buildingCost(row.building_type, row.target_level);
+    const existing = ownBuildings.find(b => b.plot_index === row.plot_index);
+    return demolishCost(row.building_type, existing ? existing.level : 1);
   }
   // `resource` param picks which output to compute for a building whose
   // type can produce more than one (currently just the homestead's
@@ -2750,6 +2783,77 @@
     }
   }
 
+  // Shared by both the homestead card and normal plot cards, for both the
+  // "building" (progress bar) and "queued" (waiting its turn) states — one
+  // button, one confirm-modal message, computed from whatever refund
+  // fraction actually applies to that row's current status.
+  function renderCancelConstructionButton(construction) {
+    const isDemolish = construction.target_level === 0;
+    const label = isDemolish ? '拆除' : '升級';
+    const def = BUILDING_TYPES[construction.building_type];
+    return `<button class="cancel-order-btn" data-cancel-construction="${construction.id}"
+      data-cancel-status="${construction.status}" data-cancel-demolish="${isDemolish ? '1' : '0'}"
+      data-cancel-name="${def ? def.name : ''}" type="button">取消這項${label}工程</button>`;
+  }
+
+  function onCancelConstructionClick(rowId, status, buildingName, isDemolish, btn) {
+    const label = isDemolish ? '拆除' : '升級';
+    const bodyText = status === 'queued'
+      ? `取消這項${buildingName}${label}工程,尚未開始施工,已支付的資源會全額退還。`
+      : `取消這項${buildingName}${label}工程,已經開始施工,只會退還一半已支付的資源(視為已投入的施工成本)。`;
+    openConfirmModal(
+      '確認取消工程',
+      bodyText,
+      '取消工程',
+      () => cancelConstructionOrder(rowId, btn)
+    );
+  }
+
+  async function cancelConstructionOrder(rowId, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const rows = await restRequest(`construction_queue?id=eq.${rowId}&select=*`);
+      const row = rows && rows[0];
+      if (!row || row.status === 'done') {
+        showToast('這項工程已經處理完成,無法取消', 'info');
+        await loadConstructionQueue();
+        return;
+      }
+      // Claim guard mirrors cancelShipOrder's own pattern — matching status
+      // means a concurrent completion (this tab, another tab, or the next
+      // pollUpdates tick) can't be silently overwritten or double-refunded.
+      const claimed = await restRequest(`construction_queue?id=eq.${rowId}&status=eq.${row.status}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'done' }),
+      });
+      if (!claimed || claimed.length === 0) {
+        showToast('工程進度剛更新,請重新確認後再試一次', 'info');
+        await loadConstructionQueue();
+        return;
+      }
+      const cost = constructionOrderCost(row);
+      const fraction = row.status === 'queued' ? 1 : CONSTRUCTION_CANCEL_BUILDING_REFUND_FRACTION;
+      const refundMetal = Math.round(cost.metal * fraction);
+      const refundCrystal = Math.round(cost.crystal * fraction);
+      if (planet) {
+        localMetal += refundMetal;
+        localCrystal += refundCrystal;
+        renderResources();
+        flashResource('metal-value', 'success');
+        flashResource('crystal-value', 'success');
+        await saveToServer();
+      }
+      showToast(`已取消工程,退回 ${fmt(refundMetal)} 金屬 · ${fmt(refundCrystal)} 晶體`, 'success');
+      await advanceConstruction();
+      await loadConstructionQueue();
+    } catch (err) {
+      console.error('Cancel construction order error:', err);
+      showToast('取消失敗,請稍後再試', 'danger');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   // Plot 0 is permanently the Homestead Camp (never demolishable, never part
   // of the empty-plot picker) — rendered separately so it can skip the
   // demolish button and the "empty plot" state that normal plots have.
@@ -2772,6 +2876,7 @@
         </div>
         <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
         <div class="plot-detail">${formatDuration(remaining)} 後升級完成</div>
+        ${renderCancelConstructionButton(construction)}
       </div>`;
     }
     if (construction && construction.status === 'queued') {
@@ -2783,6 +2888,7 @@
           <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
         </div>
         <div class="plot-detail">等待全星球的工程排到它</div>
+        ${renderCancelConstructionButton(construction)}
       </div>`;
     }
 
@@ -2915,6 +3021,7 @@
           </div>
           <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
           <div class="plot-detail">${formatDuration(remaining)} 後${isDemolish ? '拆除完成' : '完工'}</div>
+          ${renderCancelConstructionButton(construction)}
         </div>`;
       } else if (construction && construction.status === 'queued') {
         const position = queuedList.findIndex(r => r.id === construction.id) + 1;
@@ -2927,6 +3034,7 @@
             <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
           </div>
           <div class="plot-detail">等待全星球的工程排到它</div>
+          ${renderCancelConstructionButton(construction)}
         </div>`;
       } else if (building) {
         const def = BUILDING_TYPES[building.building_type];
@@ -3041,6 +3149,16 @@
         const type = btn.dataset.demolishType;
         const level = parseInt(btn.dataset.demolishLevel, 10);
         onDemolishClick(plotIndex, type, level, btn);
+      });
+    });
+
+    grid.querySelectorAll('button[data-cancel-construction]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const rowId = btn.dataset.cancelConstruction;
+        const status = btn.dataset.cancelStatus;
+        const isDemolish = btn.dataset.cancelDemolish === '1';
+        const name = btn.dataset.cancelName;
+        onCancelConstructionClick(rowId, status, name, isDemolish, btn);
       });
     });
   }
