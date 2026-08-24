@@ -1678,6 +1678,47 @@
   let knownPlanetRows = [];    // this player's known-planets registry (player-wide, not per-planet)
   let colonizationRows = [];   // in-flight (unresolved) colonization missions launched from this planet
 
+  // BUG FIX (reported by the user via a screenshot showing 總數 705/600 with
+  // several ship-production orders actively building/queued despite the
+  // fleet already being well over cap): a FOURTH distinct instance of the
+  // "stale/incomplete client-side cache used for a fleet-cap check" bug
+  // family (see the three earlier ones documented around pollUpdates()
+  // above and in the project's own changelog) — this one through the MANUAL
+  // build path rather than auto-production or poll ordering.
+  //
+  // `startGame()` renders the fleet-roster UI and fires off `pollUpdates()`
+  // WITHOUT awaiting it, so the build buttons are clickable immediately —
+  // but `cachedMissions`/`explorationRows`/`colonizationRows`/`shipQueueRows`
+  // all stay `[]` until each one's own loader inside that first `pollUpdates()`
+  // call resolves. `ownBuildings` (and therefore the shipyard-existence
+  // check) tends to load first since `loadBuildings()` is the very first
+  // await in `pollUpdates()`, but the away/exploring/colonizing loaders run
+  // much later in that same sequence — so there's a real window where
+  // `buildShips()`'s own fleet-cap check (`currentFleetTotal() + count >
+  // fleetCap`) already passes the shipyard/homestead gates but reads
+  // `currentFleetTotal()` against still-empty arrays, undercounting by
+  // however many ships are actually away/exploring/colonizing and wrongly
+  // approving an order that the REAL total would have blocked. The exact
+  // same window reopens on every `switchToPlanet()` call too, since it
+  // resets these same arrays and does not gate the UI on a fresh poll
+  // finishing either. Reproduced directly: seeding a planet with 663 ships
+  // already in an exploring mission (over the 600 cap on their own, with
+  // nothing else built yet) and clicking "build 20 scouts" in the split
+  // second right after login — before the first `pollUpdates()` resolves —
+  // correctly got REFUSED once this flag/guard was added; the unpatched
+  // code let it straight through (`currentFleetTotal()` read 15, home-only,
+  // instead of the real 678).
+  //
+  // Fix: a simple per-planet readiness flag. Starts `false`, reset to
+  // `false` on login/logout/switch (alongside the other planet-scoped
+  // arrays above), and flipped `true` only once, at the very end of a full
+  // `pollUpdates()` cycle for the CURRENT planet — by which point every
+  // loader `currentFleetTotal()` depends on has genuinely run at least once
+  // since the last login/switch. `buildShips()` and `autoQueueBatch()` (the
+  // two functions that perform a fleet-cap check) both refuse to proceed
+  // while this is `false`, rather than trusting an undercount.
+  let fleetCapDataReady = false;
+
   let localMetal = 0;
   let localCrystal = 0;
   let lastTickLocal = Date.now();
@@ -2172,6 +2213,7 @@
     explorationRows = [];
     explorationLog = [];
     colonizationRows = [];
+    fleetCapDataReady = false;
     seenIncomingMissionIds = new Set();
     seenIncomingTransportIds = new Set();
     caughtUpPlanetIds = new Set();
@@ -2274,6 +2316,7 @@
     explorationRows = [];
     explorationLog = [];
     colonizationRows = [];
+    fleetCapDataReady = false;
     seenIncomingMissionIds = new Set();
     localMetal = Number(planet.metal);
     localCrystal = Number(planet.crystal);
@@ -2329,6 +2372,12 @@
     await resolveArrivedColonizations();
     await loadColonizationMissions();
     await loadPendingTransportRequests();
+    // Every loader currentFleetTotal() depends on (loadFleetMovements,
+    // loadExplorationData, loadColonizationMissions, loadShipQueue) has now
+    // run at least once since the last login/switch — fleet-cap checks can
+    // trust currentFleetTotal() from this point on. See `fleetCapDataReady`'s
+    // own declaration comment above for the bug this closes.
+    fleetCapDataReady = true;
     // BUG FIX (reported by the user via a screen recording showing 總數
     // 712/600 jump to 742/600 immediately after a page refresh): this call
     // used to sit much earlier in this function, right after loadShipQueue().
@@ -3033,6 +3082,16 @@
       setBuildHintOverride(type, `單次最多建造 ${MAX_SHIPS_PER_ORDER} 艘`, true);
       return;
     }
+    // BUG FIX: don't trust currentFleetTotal() until every array it reads
+    // (cachedMissions/explorationRows/colonizationRows/shipQueueRows) has
+    // been loaded at least once since the last login/switch — see
+    // `fleetCapDataReady`'s declaration comment for the exact bug this
+    // closes (a manual build order slipping through the cap check in the
+    // brief window right after login/switch, before those loaders finish).
+    if (!fleetCapDataReady) {
+      setBuildHintOverride(type, '資料同步中,請稍候片刻再試', false);
+      return;
+    }
     const fleetCap = fleetCapForHomesteadLevel(homesteadLevel());
     const fleetNow = currentFleetTotal();
     if (fleetNow + count > fleetCap) {
@@ -3221,6 +3280,13 @@
     const shipyards = ownBuildings.filter(b => b.building_type === 'shipyard');
     if (shipyards.length === 0) return; // shouldn't happen behind the gate, but stay defensive
 
+    // Same guard as buildShips() — see `fleetCapDataReady`'s declaration
+    // comment. autoQueueBatch() only ever runs from inside pollUpdates()
+    // (already safe, since it's called after that same cycle's own loaders)
+    // OR directly from toggleAutoProduce() when a player switches automation
+    // ON (NOT necessarily safe — that can happen at any time, including the
+    // brief window right after login/switch) — this covers that second path.
+    if (!fleetCapDataReady) return; // silently skip this cycle; retried automatically next poll/toggle
     const fleetCap = fleetCapForHomesteadLevel(homesteadLevel());
     const fleetNow = currentFleetTotal();
     if (fleetNow + count > fleetCap) {
