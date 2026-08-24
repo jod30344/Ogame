@@ -22,6 +22,7 @@
     --core: #ffd166;
     --automation: #5fd0e0;
     --colonize: #ff8fc4;
+    --food: #7fd47f;
   }
   * { box-sizing: border-box; }
   body {
@@ -109,7 +110,7 @@
   }
   .signout:hover { border-color: var(--warn); color: var(--warn); }
 
-  .resources { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0 30px; }
+  .resources { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 24px 0 30px; }
   .res-card {
     background: var(--bg-panel);
     border: 1px solid var(--line);
@@ -121,9 +122,11 @@
   .res-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
   .res-card.metal::before { background: var(--metal); }
   .res-card.crystal::before { background: var(--crystal); }
+  .res-card.food::before { background: var(--food); }
   .res-label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
   .res-value { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .res-rate { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: 'Space Mono', monospace; }
+  .res-rate.negative { color: var(--warn); font-weight: 600; }
 
   .section-label {
     font-family: 'Space Mono', monospace;
@@ -845,6 +848,11 @@
       <div class="res-value" id="crystal-value">0</div>
       <div class="res-rate" id="crystal-rate">+0 / 秒</div>
     </div>
+    <div class="res-card food">
+      <div class="res-label">糧食</div>
+      <div class="res-value" id="food-value">0</div>
+      <div class="res-rate" id="food-rate">+0 / 秒</div>
+    </div>
     <div class="res-card fleet wide hidden" id="fleet-top-card">
       <div class="fleet-top-header">
         <div class="res-label">艦隊</div>
@@ -1023,6 +1031,15 @@
   const BUILDING_TYPES = {
     metal_mine:   { name: '金屬礦場',     resource: 'metal',   baseRate: 1.5, baseCost: { metal: 1400, crystal: 400 }, baseBuildSeconds: 220 },
     crystal_mine: { name: '晶體精煉廠',   resource: 'crystal', baseRate: 1.0, baseCost: { metal: 1100, crystal: 600 }, baseBuildSeconds: 220 },
+    // LV1 building, same tier as the two mines above — produces 糧食 (food),
+    // which the fleet continuously eats through (see FOOD_UPKEEP_PER_SHIP_
+    // PER_SECOND / resolveFoodUpkeep() below). Per explicit user request:
+    // pilots need to eat regardless of ship type, so this is a genuine third
+    // resource stream/sink, not a building-cost currency — nothing's
+    // buildingCost()/demolishCost() ever charges in 糧食, it only ever flows
+    // in (this building) and out (fleet upkeep, and later 商貿 trade with
+    // NPCs).
+    farm:         { name: '農場',         resource: 'food',    baseRate: 1.2, baseCost: { metal: 1300, crystal: 500 }, baseBuildSeconds: 220 },
     shipyard:     { name: '造船廠',       resource: null,      baseCost: { metal: 1500, crystal: 1100 },             baseBuildSeconds: 240 },
     // Unlocks at the same homestead tier as the shipyard, but gates
     // *information* rather than production: only once one of these is
@@ -1072,6 +1089,28 @@
   // "start-from-zero" design already in place for those.
   const STARTING_METAL = 150;
   const STARTING_CRYSTAL = 90;
+  const STARTING_FOOD = 100;
+  // ---- 糧食 (food) upkeep — per explicit user request, "pilots need to
+  // survive": every ship in the fleet continuously eats through 糧食 while at
+  // home (see resolveFoodUpkeep(), called from tick()), and a mission
+  // launch pre-pays its own crew's rations for the whole trip up front (see
+  // missionFoodCost()) rather than risking starving mid-flight — a mission
+  // that can't afford its rations is blocked before it ever launches, same
+  // "resource insufficient" treatment as every other cost check in this
+  // game. Only a HOME fleet can actually starve.
+  const FOOD_UPKEEP_PER_SHIP_PER_SECOND = 0.05;
+  // If the home fleet's upkeep can't be paid, the shortfall is expressed as
+  // a fraction of that tick's total upkeep bill (deficit / upkeepNeeded) —
+  // this ratio is scale-invariant with respect to how much real time has
+  // actually elapsed (a live 500ms tick and a multi-hour catch-up after
+  // reopening the game both converge to the same steady-state ratio), so
+  // one formula/code path correctly covers both a live starvation event and
+  // catching up after being away — see resolveFoodUpkeep(). Capped well
+  // below mission attrition's own MAX_LOSS_FRACTION (0.55) since this is a
+  // pure economy-management failure the player can always see coming
+  // (unlike attrition's inherent combat risk), not something that should be
+  // able to wipe most of a standing fleet in one bad catch-up.
+  const MAX_STARVATION_LOSS_FRACTION = 0.3;
   const COST_GROWTH = 1.55;  // resource cost multiplier per target level — steeper so late-game upgrades are a real investment
   const TIME_GROWTH = 1.45;  // build-time multiplier per target level
 
@@ -1390,6 +1429,7 @@
   const BUILDING_ICONS = {
     metal_mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c4 0 7 1.5 9 5.5"/><path d="M20 4c-4 0-7 1.5-9 5.5"/><path d="M9.5 9.5L4 20M14.5 9.5L20 20"/></svg>',
     crystal_mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h10l4 6-11 12L2 9z"/><path d="M2 9h20M7 3l3 6-3 12M17 3l-3 6 3 12"/></svg>',
+    farm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="M12 9c-4-1-5-4-5-7 3 0 6 1 5 7z"/><path d="M12 13c4-1 5-4 5-7-3 0-6 1-5 7z"/><path d="M7 21h10"/></svg>',
     shipyard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c2.5 2.5 3.5 6 3.5 10.5 0 2-.5 4-1 5.5h-5c-.5-1.5-1-3.5-1-5.5C8.5 8 9.5 4.5 12 2z"/><path d="M8.5 14l-3 3.5M15.5 14l3 3.5"/><circle cx="12" cy="10" r="1.4"/><path d="M10 21.5h4"/></svg>',
     homestead: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 4h12l-3 4 3 4H6"/></svg>',
     intel_center: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><path d="M12 12L18 7"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/></svg>',
@@ -1754,6 +1794,7 @@
 
   let localMetal = 0;
   let localCrystal = 0;
+  let localFood = 0;
   let lastTickLocal = Date.now();
   let saveTimer = null;
   let tickInterval = null;
@@ -2041,18 +2082,28 @@
   }
 
   // Compute current live resources for an arbitrary planet row (used when resolving battles)
+  // NOTE: this catches up PRODUCTION only (metal/crystal/food), exactly the
+  // same simplification the game already had for metal/crystal before food
+  // existed — it does NOT catch up food UPKEEP/starvation for a planet that
+  // isn't the one currently being actively viewed/ticked. See
+  // resolveFoodUpkeep()'s own comments: upkeep only actually runs inside the
+  // live tick() loop for whichever planet is open right now, same "only
+  // resolves while viewed" simplification already documented elsewhere in
+  // this file (e.g. colonization mission resolution).
   async function currentResourcesOfPlanet(p) {
     const buildings = await restRequest(`buildings?planet_id=eq.${p.id}&select=*`);
-    let metalRate = 0, crystalRate = 0;
+    let metalRate = 0, crystalRate = 0, foodRate = 0;
     (buildings || []).forEach(b => {
       if (b.building_type === 'metal_mine') metalRate += miningRate('metal_mine', b.level);
       if (b.building_type === 'crystal_mine') crystalRate += miningRate('crystal_mine', b.level);
+      if (b.building_type === 'farm') foodRate += miningRate('farm', b.level, 'food');
     });
     const lastTick = new Date(p.last_tick).getTime();
     const elapsedSec = Math.max(0, (Date.now() - lastTick) / 1000);
     return {
       metal: Number(p.metal) + metalRate * elapsedSec,
       crystal: Number(p.crystal) + crystalRate * elapsedSec,
+      food: Number(p.food || 0) + foodRate * elapsedSec,
     };
   }
 
@@ -2155,7 +2206,7 @@
     if (planets.length === 0) {
       const created = await restRequest('planets', {
         method: 'POST',
-        body: JSON.stringify({ player_name: name, metal: STARTING_METAL, crystal: STARTING_CRYSTAL }),
+        body: JSON.stringify({ player_name: name, metal: STARTING_METAL, crystal: STARTING_CRYSTAL, food: STARTING_FOOD }),
       });
       planets = created;
       if (created && created[0]) await seedHomestead(created[0].id);
@@ -2276,6 +2327,7 @@
     lastTickLocal = Date.now();
     localMetal = Number(planet.metal);
     localCrystal = Number(planet.crystal);
+    localFood = Number(planet.food || STARTING_FOOD);
 
     renderFleetRoster();
     renderResources();
@@ -2353,6 +2405,7 @@
     seenIncomingMissionIds = new Set();
     localMetal = Number(planet.metal);
     localCrystal = Number(planet.crystal);
+    localFood = Number(planet.food || STARTING_FOOD);
     lastTickLocal = Date.now();
     document.getElementById('coord-label').textContent = `星系座標 ${planet.coord}`;
     document.getElementById('planet-title').textContent = planet.player_name + ' 的殖民地';
@@ -2461,7 +2514,73 @@
     lastTickLocal = now;
     localMetal += totalRate('metal') * elapsedSec;
     localCrystal += totalRate('crystal') * elapsedSec;
+    localFood += totalRate('food') * elapsedSec;
+    resolveFoodUpkeep(elapsedSec);
     renderResources();
+  }
+
+  // Sum of every home ship count (mothership included — it eats too — but
+  // see resolveFoodUpkeep()'s own comment for why it's excluded from the
+  // LOSS pool specifically).
+  function totalHomeShipCount() {
+    if (!planet) return 0;
+    return Object.keys(SHIP_TYPES).reduce((sum, t) => sum + (planet[`${t}_count`] || 0), 0);
+  }
+  function foodUpkeepPerSecond() {
+    return totalHomeShipCount() * FOOD_UPKEEP_PER_SHIP_PER_SECOND;
+  }
+
+  // Deducts this tick's home-fleet food upkeep from localFood. If the
+  // deficit can't be covered, food clamps to 0 and a fraction of the HOME
+  // fleet starves — see MAX_STARVATION_LOSS_FRACTION's own comment for why
+  // deficit/upkeepNeeded is safe to use as-is for both a live 500ms tick and
+  // a much longer catch-up window (e.g. right after switching back to this
+  // planet, where elapsedSec can be hours). Mothership is deliberately
+  // excluded from the loss pool — it's a rare, expensive, one-off strategic
+  // asset (can't even be auto-produced), so a passive economy hiccup
+  // shouldn't be able to cost a player one; only the more replaceable ship
+  // types (scout/fighter/transport) are at risk here. Reuses the existing
+  // mission-attrition SHIP_LOSS_VULNERABILITY table/shipLossCount() helper
+  // rather than inventing a separate one — a reasonable simplification, not
+  // a claim that combat survivability and crew nutrition are the same
+  // thing.
+  function resolveFoodUpkeep(elapsedSec) {
+    if (!planet) return;
+    const upkeepNeeded = foodUpkeepPerSecond() * elapsedSec;
+    if (upkeepNeeded <= 0) return;
+    localFood -= upkeepNeeded;
+    if (localFood >= 0) return;
+    const deficit = -localFood;
+    localFood = 0;
+    const lossFraction = Math.min(deficit / upkeepNeeded, MAX_STARVATION_LOSS_FRACTION);
+    if (lossFraction <= 0) return;
+    let anyLost = false;
+    Object.keys(SHIP_TYPES).filter(t => t !== 'mothership').forEach(type => {
+      const home = planet[`${type}_count`] || 0;
+      const lost = shipLossCount(home, lossFraction, type);
+      if (lost > 0) {
+        planet[`${type}_count`] = home - lost;
+        anyLost = true;
+        flashResource(`${type}-count`, 'danger');
+      }
+    });
+    if (anyLost) {
+      showToast('糧食短缺,艦隊出現減員——記得多蓋幾座農場', 'danger', 8000);
+      renderFleetTopBar();
+      renderFleetRoster();
+    }
+  }
+
+  // What a mission of `shipCounts` (an object like {scout, fighter,
+  // transport}) needs pre-paid in 糧食 up front to cover its whole round
+  // trip — see the FOOD_UPKEEP_PER_SHIP_PER_SECOND comment for why this is
+  // paid at launch rather than deducted en route (a traveling fleet can
+  // never starve mid-mission; it either affords its rations before
+  // departure or the launch is blocked, same as any other insufficient-
+  // resource check in this game).
+  function missionFoodCost(shipCounts, durationSeconds) {
+    const totalShips = Object.values(shipCounts).reduce((sum, c) => sum + (c || 0), 0);
+    return Math.round(totalShips * FOOD_UPKEEP_PER_SHIP_PER_SECOND * durationSeconds);
   }
 
   function scheduleSave() {
@@ -2479,6 +2598,7 @@
         body: JSON.stringify({
           metal: localMetal,
           crystal: localCrystal,
+          food: localFood,
           last_tick: new Date().toISOString(),
           fighter_count: planet.fighter_count,
           transport_count: planet.transport_count || 0,
@@ -2508,8 +2628,16 @@
   function renderResources() {
     document.getElementById('metal-value').textContent = fmt(localMetal);
     document.getElementById('crystal-value').textContent = fmt(localCrystal);
+    document.getElementById('food-value').textContent = fmt(localFood);
     document.getElementById('metal-rate').textContent = `+${totalRate('metal').toFixed(1)} / 秒`;
     document.getElementById('crystal-rate').textContent = `+${totalRate('crystal').toFixed(1)} / 秒`;
+    // Food's rate line shows the NET rate (production minus fleet upkeep),
+    // not just production — that's the number that actually tells a player
+    // whether they're heading toward a surplus or a starvation event.
+    const foodNet = totalRate('food') - foodUpkeepPerSecond();
+    const foodRateEl = document.getElementById('food-rate');
+    foodRateEl.textContent = `${foodNet >= 0 ? '+' : ''}${foodNet.toFixed(1)} / 秒`;
+    foodRateEl.classList.toggle('negative', foodNet < 0);
     // Ship-type home counts no longer have a per-card DOM node to update here
     // (the fleet-roster card dropped its "在家" badge — see renderFleetRoster)
     // — renderFleetOverview()/renderFleetTopBar() below fully rebuilds the top
@@ -3854,7 +3982,19 @@
       const launchTime = new Date();
       const arrivalTime = new Date(launchTime.getTime() + travelSec * 1000);
 
+      // Food is pre-paid proportional to travel duration, same as every
+      // other mission type. The actual distance (and therefore the cost)
+      // isn't known until the defender's planet/coord is fetched above, so
+      // this authoritative check lives here rather than in onAttackClick().
+      const foodCost = missionFoodCost({ fighter: A }, travelSec);
+      if (foodCost > localFood) {
+        msg.textContent = `糧食不足,此次任務需要 ${foodCost} 糧食(現有 ${Math.floor(localFood)})`;
+        attackBtn.disabled = false;
+        return;
+      }
+
       planet.fighter_count -= A;
+      localFood -= foodCost;
       renderResources();
       flashResource('fighter-count', 'danger');
       await saveToServer();
@@ -4323,6 +4463,22 @@
       const launchTime = new Date();
       const arrivalTime = new Date(launchTime.getTime() + travelSec * 1000);
 
+      // Food is pre-paid at the moment the mission actually launches — which
+      // for transport is HERE, at receiver-side approval, not at the
+      // sender's original request. currentResourcesOfPlanet() (called above
+      // as senderRes) already re-validated/caught-up the sender's live food,
+      // matching the same pattern already used for metal/crystal.
+      const transportFoodCost = missionFoodCost({ transport: mission.transport_ships_sent }, travelSec);
+      if (senderRes.food < transportFoodCost) {
+        await restRequest(`fleet_missions?id=eq.${missionId}&approval_status=eq.pending`, {
+          method: 'PATCH',
+          body: JSON.stringify({ approval_status: 'declined', resolved: true }),
+        });
+        showToast('對方糧食已不足,這筆運輸自動失效', 'danger');
+        await loadPendingTransportRequests();
+        return;
+      }
+
       const claimed = await restRequest(`fleet_missions?id=eq.${missionId}&approval_status=eq.pending`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -4339,6 +4495,7 @@
           transport_count: senderPlanet.transport_count - mission.transport_ships_sent,
           metal: senderRes.metal - mission.cargo_metal,
           crystal: senderRes.crystal - mission.cargo_crystal,
+          food: senderRes.food - transportFoodCost,
           last_tick: new Date().toISOString(),
         }),
       });
@@ -4346,6 +4503,7 @@
         planet.transport_count = senderPlanet.transport_count - mission.transport_ships_sent;
         localMetal = senderRes.metal - mission.cargo_metal;
         localCrystal = senderRes.crystal - mission.cargo_crystal;
+        localFood = senderRes.food - transportFoodCost;
         lastTickLocal = Date.now();
         renderResources();
       }
@@ -4488,10 +4646,16 @@
     if (transportCount > (planet.transport_count || 0)) { msg.textContent = `你只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
 
     const tier = EXPLORATION_TIERS[selectedExplorationTier];
+    // Mission food is pre-paid up front, proportional to travel duration —
+    // see missionFoodCost()'s comment for the rationale. Checked here (with
+    // the player's live localFood) for immediate feedback; the actual
+    // deduction happens in launchExploration() right before committing.
+    const foodCost = missionFoodCost({ scout: scoutCount, fighter: fighterCount, transport: transportCount }, tier.seconds);
+    if (foodCost > localFood) { msg.textContent = `糧食不足,此次任務需要 ${foodCost} 糧食(現有 ${Math.floor(localFood)})`; return; }
     const transportNote = transportCount > 0 ? '' : '(未帶運輸艦,即使有發現也無法帶回任何戰利品)';
     openConfirmModal(
       '確認派遣探索',
-      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)})。${transportNote}艦隊出發後無法召回。`,
+      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)}),需消耗 ${foodCost} 糧食。${transportNote}艦隊出發後無法召回。`,
       '派遣',
       () => launchExploration(scoutCount, fighterCount, transportCount)
     );
@@ -4506,6 +4670,7 @@
     planet.scout_count = (planet.scout_count || 0) - scoutCount;
     planet.fighter_count -= fighterCount;
     planet.transport_count = (planet.transport_count || 0) - transportCount;
+    localFood -= missionFoodCost({ scout: scoutCount, fighter: fighterCount, transport: transportCount }, tier.seconds);
     renderResources();
     flashResource('scout-count', 'danger');
     flashResource('fighter-count', 'danger');
@@ -5063,12 +5228,18 @@
       showToast(`最多同時派遣 ${explorationCap} 支艦隊(含探索與偵查),請等其中一支返航`, 'danger');
       return;
     }
-    if (btn) btn.disabled = true;
     const travelSec = travelSeconds(planet.coord, coord);
+    const foodCost = missionFoodCost({ scout: scoutCount }, travelSec);
+    if (foodCost > localFood) {
+      showToast(`糧食不足,此次偵查需要 ${foodCost} 糧食(現有 ${Math.floor(localFood)})`, 'danger');
+      return;
+    }
+    if (btn) btn.disabled = true;
     const launchTime = new Date();
     const arrivalTime = new Date(launchTime.getTime() + travelSec * 1000);
 
     planet.scout_count = (planet.scout_count || 0) - scoutCount;
+    localFood -= foodCost;
     renderResources();
     flashResource('scout-count', 'danger');
     await saveToServer();
@@ -5194,6 +5365,8 @@
     if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
 
     const { coord, explorationId } = pendingColonizeContext;
+    const colonizeFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, colonizationTravelSeconds(planet.coord, coord));
+    if (colonizeFoodCost > localFood) { msg.textContent = `糧食不足,此次殖民需要 ${colonizeFoodCost} 糧食(現有 ${Math.floor(localFood)})`; return; }
     const okBtn = document.getElementById('colonize-modal-ok');
     okBtn.disabled = true;
     try {
@@ -5237,6 +5410,7 @@
     planet.transport_count = (planet.transport_count || 0) - transport;
     localMetal -= metal;
     localCrystal -= crystal;
+    localFood -= missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
     renderResources();
     if (metal > 0) flashResource('metal-value', 'danger');
     if (crystal > 0) flashResource('crystal-value', 'danger');
@@ -5331,6 +5505,13 @@
         scout_count: mission.scout_ships_sent || 0,
         fighter_count: mission.fighter_ships_sent || 0,
         transport_count: mission.transport_ships_sent || 0,
+        // New colonies start with a fixed food seed (same STARTING_FOOD as a
+        // brand-new player planet) rather than exposing yet another
+        // colonize-modal input — kept in scope-contained territory since the
+        // mothership/scout/fighter/transport/metal/crystal the player already
+        // commits are the meaningful "what do I bring" decision; food is a
+        // small buffer so the new colony isn't instantly starving on arrival.
+        food: STARTING_FOOD,
         // Explicit, not relied on as a DB default: every other place in this
         // file that sets metal/crystal to an absolute value also stamps
         // last_tick alongside it (see saveToServer() and the mission-loot
