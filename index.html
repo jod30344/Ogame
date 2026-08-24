@@ -1445,7 +1445,7 @@
     // it's meant to feel like a genuine milestone investment, not a routine
     // shipyard order. First-pass numbers, open to rebalancing.
     mothership: { name: '殖民母艦', cost: { metal: 1200, crystal: 900 }, baseSeconds: 2400, cargoCapacity: 0,
-      role: '承載文明火種的殖民母艦,發起殖民時必須綁定至少一艘,抵達新殖民地後即完成使命、隨之消耗。',
+      role: '承載文明火種的殖民母艦,抵達新殖民地後化為拓荒者營地。',
       statLine: '殖民任務的必要載具,不計入探索/戰鬥/運輸任務',
       minHomesteadLevel: HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL, noAutoProduce: true },
   };
@@ -5035,7 +5035,7 @@
     pendingColonizeContext = { coord, explorationId: explorationId || null };
     const travelSec = colonizationTravelSeconds(planet.coord, coord);
     document.getElementById('colonize-modal-intro').textContent =
-      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後即完成使命、隨之消耗,不會返航也不會留在新殖民地);下方也可選擇額外攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。`;
+      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後將化為拓荒者營地,不會返航);下方也可選擇額外攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。`;
     document.getElementById('colonize-mothership').value = 1;
     ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal'].forEach(id => {
       document.getElementById(id).value = 0;
