@@ -722,6 +722,7 @@
   }
   .explore-log-entry .log-text { color: var(--text-dim); margin-bottom: 6px; line-height: 1.5; }
   .explore-log-entry .log-loot { font-family: 'Space Mono', monospace; font-size: 12.5px; }
+  .explore-log-entry .log-loot.colonize-locked { color: var(--text-dim); font-style: italic; }
   .explore-log-entry.rare { border-left: 3px solid var(--crystal); background: #221a10; }
   button.colonize-btn {
     margin-top: 8px;
@@ -777,6 +778,10 @@
     <div class="modal-body">
       <div class="colonize-intro" id="colonize-modal-intro"></div>
       <div class="colonize-form-grid">
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-mothership">殖民母艦</label>
+          <input type="number" class="ship-input" id="colonize-mothership" min="1" value="1">
+        </div>
         <div class="ship-input-group">
           <label class="ship-input-label" for="colonize-scout">偵察機</label>
           <input type="number" class="ship-input" id="colonize-scout" min="0" value="0">
@@ -1107,9 +1112,18 @@
   // rather than the homestead scaling open-endedly ahead of the content that
   // exists to back it.
   const HOMESTEAD_AUTOMATION_UNLOCK_LEVEL = 4;
+  // LV4 also unlocks 殖民母艦 (Colonization Mothership) — a dedicated ship
+  // type required to launch any colonization mission at all (see SHIP_TYPES
+  // below / launchColonization). Same unlock level as automation on purpose:
+  // both are meant to be this version's "endgame tier" content gated behind
+  // the current MAX_HOMESTEAD_LEVEL cap.
+  const HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL = 4;
   const MAX_HOMESTEAD_LEVEL = 4;
   function automationTechUnlocked() {
     return homesteadLevel() >= HOMESTEAD_AUTOMATION_UNLOCK_LEVEL;
+  }
+  function motherShipTechUnlocked() {
+    return homesteadLevel() >= HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL;
   }
   const FLEET_CAP_BASE = 150;       // combined fighter+transport cap at homestead LV1
   const FLEET_CAP_PER_LEVEL = 150;  // added to the cap per homestead level above 1
@@ -1386,6 +1400,7 @@
     fighter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.2 8.2H20l-5.8 4 2.2 7.8L12 17l-4.4 5 2.2-7.8L4 10.2h5.8z"/></svg>',
     transport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="9" rx="1.5"/><path d="M3 12h18M8 8V5.5h8V8"/></svg>',
     scout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 7-7 13-7-13z"/><path d="M12 2v20"/></svg>',
+    mothership: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="4.2"/><path d="M3 12c0 2.3 4 4.2 9 4.2s9-1.9 9-4.2"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>',
   };
 
   // Two ship types share the same shipyards/production lines. `baseSeconds` is
@@ -1415,6 +1430,24 @@
     transport: { name: '運輸艦', cost: { metal: 90, crystal: 40 }, baseSeconds: 200, cargoCapacity: 400,
       role: '負責搬運資源,可在對方同意後送資源過去,或於探索時攜帶戰利品返航。',
       statLine: '載貨量:每艘 400(金屬+晶體合計)' },
+    // LV4 殖民母艦 ship type — the mandatory "commitment" vessel for
+    // colonization (see launchColonization). Two extra fields beyond the
+    // other ship types, both consumed generically by the code that reads
+    // them (see visibleShipTypes / renderFleetRoster / buildShips):
+    //   minHomesteadLevel -> hides the card/chip and blocks direct builds
+    //                        below this homestead level (mirrors the
+    //                        existing shipyard-level gate, but per-ship-type)
+    //   noAutoProduce      -> this ship type never offers the 自動生產
+    //                        toggle, even once 自動化研究院 exists — a
+    //                        mothership is a deliberate one-off commitment,
+    //                        not a routine production-line item.
+    // Cost/build-time are intentionally steep relative to the other three —
+    // it's meant to feel like a genuine milestone investment, not a routine
+    // shipyard order. First-pass numbers, open to rebalancing.
+    mothership: { name: '殖民母艦', cost: { metal: 1200, crystal: 900 }, baseSeconds: 2400, cargoCapacity: 0,
+      role: '承載文明火種的殖民母艦,發起殖民時必須綁定至少一艘,抵達新殖民地後即完成使命、隨之消耗。',
+      statLine: '殖民任務的必要載具,不計入探索/戰鬥/運輸任務',
+      minHomesteadLevel: HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL, noAutoProduce: true },
   };
   const BASE_SECONDS_PER_SHIP = SHIP_TYPES.fighter.baseSeconds; // kept for existing references
   const SHIP_SPEED_GROWTH = 0.92;    // each shipyard level is ~8% faster than the previous
@@ -1422,6 +1455,21 @@
   const STEAL_FRACTION = 0.2;
   const SECONDS_PER_COORD_UNIT = 5;
   const MIN_TRAVEL_SECONDS = 30;
+  // Colonization gets its OWN distance-to-time formula, deliberately kept
+  // separate from the shared recon/transport/attack travelSeconds() above so
+  // tuning one never accidentally speeds up or slows down the other. Per
+  // explicit user request: colonization should feel like a "big civilization
+  // event", days-scale rather than the ~30-minute trips it previously shared
+  // with ordinary fleet movement. Floor/cap/rate below were calibrated
+  // against a real observed in-game distance (~4,499 coordinate units, from
+  // a user-provided screenshot) so the 1–3 day range lines up with actual
+  // gameplay distances rather than being picked arbitrarily:
+  //   distance <= 2160 units -> 1-day floor
+  //   distance >= 4320 units -> 3-day cap
+  //   in between             -> linear at 40 sec/unit
+  const COLONIZATION_MIN_TRAVEL_SECONDS = 86400;   // 1 day floor
+  const COLONIZATION_MAX_TRAVEL_SECONDS = 259200;  // 3 day cap
+  const COLONIZATION_SECONDS_PER_COORD_UNIT = 40;
   const MAX_QUEUE_DOTS = 40;
   const MAX_SHIPS_PER_ORDER = 1000;
   const MAX_QUEUED_ORDERS_SHOWN = 4;
@@ -1591,6 +1639,14 @@
     const distance = Math.abs(coordA - coordB);
     return Math.max(MIN_TRAVEL_SECONDS, Math.round(distance * SECONDS_PER_COORD_UNIT));
   }
+  // Colonization-only travel time — see the COLONIZATION_* constants above
+  // for why this is kept separate from travelSeconds(). Same shape (floor +
+  // linear + cap) but on a days-scale instead of a minutes-scale.
+  function colonizationTravelSeconds(coordA, coordB) {
+    const distance = Math.abs(coordA - coordB);
+    const raw = distance * COLONIZATION_SECONDS_PER_COORD_UNIT;
+    return Math.min(COLONIZATION_MAX_TRAVEL_SECONDS, Math.max(COLONIZATION_MIN_TRAVEL_SECONDS, Math.round(raw)));
+  }
   function formatDuration(sec) {
     sec = Math.max(0, Math.round(sec));
     if (sec < 60) return `${sec} 秒`;
@@ -1599,7 +1655,10 @@
     if (m < 60) return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分鐘`;
     const h = Math.floor(m / 60);
     const remM = m % 60;
-    return `${h} 小時 ${remM} 分`;
+    if (h < 24) return `${h} 小時 ${remM} 分`;
+    const d = Math.floor(h / 24);
+    const remH = h % 24;
+    return remH > 0 ? `${d} 天 ${remH} 小時` : `${d} 天`;
   }
   function fmt(n) { return Math.floor(n).toLocaleString('zh-TW'); }
 
@@ -1750,11 +1809,21 @@
       <div class="fleet-status-chips">${fleetStatusChipsHtml(home, away, exploring, building, colonizing, { includeHome: true })}</div>
     </div>`;
   }
+  // Ship types can now carry a `minHomesteadLevel` gate (currently just
+  // mothership, LV4) — this filters Object.keys(SHIP_TYPES) down to the
+  // subset the player has actually unlocked, so a not-yet-available type's
+  // top-bar chip / roster card simply doesn't render (progressive
+  // disclosure, same pattern used everywhere else in this file) instead of
+  // showing a disabled/locked placeholder.
+  function visibleShipTypes() {
+    const level = homesteadLevel();
+    return Object.keys(SHIP_TYPES).filter(type => level >= (SHIP_TYPES[type].minHomesteadLevel || 1));
+  }
   function renderFleetTopBar() {
     if (!planet) return;
     const gridEl = document.getElementById('fleet-top-grid');
     if (!gridEl) return;
-    gridEl.innerHTML = Object.keys(SHIP_TYPES).map(type => {
+    gridEl.innerHTML = visibleShipTypes().map(type => {
       const def = SHIP_TYPES[type];
       const home = planet[`${type}_count`] || 0;
       return fleetTypeBlockHtml(SHIP_ICONS[type] || '', def.name, home, fleetAwayCount(type), fleetExploringCount(type), fleetBuildingCount(type), fleetColonizingCount(type));
@@ -1798,11 +1867,11 @@
     // into each input across that re-render, or it would silently reset back
     // to "1" mid-poll while the player's part-way through typing an order.
     const preservedCounts = {};
-    Object.keys(SHIP_TYPES).forEach(type => {
+    visibleShipTypes().forEach(type => {
       const existing = document.getElementById(`build-count-${type}`);
       if (existing && existing.value) preservedCounts[type] = existing.value;
     });
-    el.innerHTML = Object.keys(SHIP_TYPES).map(type => {
+    el.innerHTML = visibleShipTypes().map(type => {
       const def = SHIP_TYPES[type];
       const icon = SHIP_ICONS[type] || '';
       // 自動生產: the toggle itself only appears once the automation institute
@@ -1813,8 +1882,11 @@
       // that was captured at the moment automation was switched on, per
       // explicit user request — not the live input value, so there's no
       // ambiguity about which number is actually governing production.
+      // `noAutoProduce` (currently just mothership) opts a type out of ever
+      // offering the toggle, even once the automation institute exists — see
+      // SHIP_TYPES' comment for why.
       const autoOn = isAutoProducing(type);
-      const autoAvailable = hasAutomationInstitute();
+      const autoAvailable = hasAutomationInstitute() && !def.noAutoProduce;
       const lockedBatch = planet[`auto_produce_${type}_batch`] || 0;
       const countValue = autoOn ? lockedBatch : (preservedCounts[type] || 1);
       const autoBtnHtml = autoAvailable
@@ -2329,6 +2401,18 @@
           fighter_count: planet.fighter_count,
           transport_count: planet.transport_count || 0,
           scout_count: planet.scout_count || 0,
+          // BUG FIX (caught while adding the mothership ship type): every
+          // OTHER home ship-count field is persisted here, but a new type
+          // added to SHIP_TYPES does NOT automatically get a line in this
+          // PATCH body — this function was never made generic over
+          // Object.keys(SHIP_TYPES). Without this, planet.mothership_count
+          // changes made in-memory (buildShips -> resolveShipQueue's
+          // creditShips, or launchColonization's decrement) would render
+          // correctly for the current tab but silently revert to whatever
+          // stale value the server has on the next page load/poll cycle —
+          // the same class of "client cache vs. server truth" desync as the
+          // earlier fleet-cap poll-ordering bug, just via a different gap.
+          mothership_count: planet.mothership_count || 0,
         }),
       });
     } catch (err) {
@@ -2933,6 +3017,14 @@
       setBuildHintOverride(type, `拓荒者營地需升級到 LV${HOMESTEAD_SHIPYARD_UNLOCK_LEVEL} 才能開始生產艦隊(目前 LV${homesteadLevel()})`, true);
       return;
     }
+    // Generic per-type gate (currently only mothership sets this) — a safety
+    // net behind the progressive-disclosure UI: the build card for a
+    // not-yet-unlocked type shouldn't even render (see visibleShipTypes()),
+    // but this blocks any direct call from slipping through regardless.
+    if (typeDef.minHomesteadLevel && homesteadLevel() < typeDef.minHomesteadLevel) {
+      setBuildHintOverride(type, `拓荒者營地需升級到 LV${typeDef.minHomesteadLevel} 才能開始生產${typeDef.name}(目前 LV${homesteadLevel()})`, true);
+      return;
+    }
     if (!count || count < 1) {
       setBuildHintOverride(type, '請輸入至少 1 艘', true);
       return;
@@ -3016,6 +3108,10 @@
   // shipyard or frees up a line by turning an existing one off first.
   async function toggleAutoProduce(type, btn) {
     if (!planet || !hasAutomationInstitute()) return;
+    // Safety net mirroring buildShips()'s minHomesteadLevel check — the
+    // auto-btn itself is never rendered for a noAutoProduce type (currently
+    // just mothership), but block any direct call regardless.
+    if (SHIP_TYPES[type] && SHIP_TYPES[type].noAutoProduce) return;
     const turningOn = !isAutoProducing(type);
     if (turningOn) {
       const shipyardCount = ownBuildings.filter(b => b.building_type === 'shipyard').length;
@@ -4592,8 +4688,16 @@
         extra = `<div class="log-loot">已被玩家「${m.found_player_name || '未知'}」佔領,已加入下方「已知星球」清單</div>`;
       } else if (isRare) {
         // found_type === 'empty', or absent on a pre-existing row from before
-        // this feature — both keep the original direct-colonize flow.
-        extra = `<button class="colonize-btn" data-colonize="${m.id}" data-coord="${m.found_coord}" type="button">殖民這顆星球(座標 ${m.found_coord})</button>`;
+        // this feature — both keep the original direct-colonize flow, gated
+        // on having at least one 殖民母艦 at home. Without one, the planet
+        // stays right here in the log (nothing is lost) with an explanatory
+        // message instead of a button — the button reappears automatically
+        // once a mothership finishes building, no extra state to track.
+        if ((planet.mothership_count || 0) < 1) {
+          extra = `<div class="log-loot colonize-locked">需要至少 1 艘殖民母艦(LV${HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL} 造船廠解鎖)才能殖民這顆星球(座標 ${m.found_coord}),星球資訊已保留</div>`;
+        } else {
+          extra = `<button class="colonize-btn" data-colonize="${m.id}" data-coord="${m.found_coord}" type="button">殖民這顆星球(座標 ${m.found_coord})</button>`;
+        }
       }
       return `<div class="explore-log-entry${isRare ? ' rare' : ''}">
         <div class="log-text">${m.log_text || ''}</div>
@@ -4710,6 +4814,10 @@
         const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
         const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
         colonizeBtn = `<div class="log-loot">殖民艦隊已出發,${etaText}</div>`;
+      } else if (kp.target_type === 'empty' && (planet.mothership_count || 0) < 1) {
+        // Same mothership gate as the exploration log — the known-planet
+        // entry itself stays listed either way, only the button is withheld.
+        colonizeBtn = `<div class="log-loot colonize-locked">需要至少 1 艘殖民母艦(LV${HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL} 造船廠解鎖)才能殖民</div>`;
       } else if (kp.target_type === 'empty') {
         colonizeBtn = `<button class="upgrade" data-colonize-known="${kp.coord}" type="button">殖民</button>`;
       }
@@ -4814,31 +4922,55 @@
   // 殖民艦隊派遣 (Colonization missions) — per explicit user request,
   // colonizing a discovered/known coordinate is no longer instant. It now
   // travels like every other mission in this game (recon, transport,
-  // exploration), using the SAME distance-based travel-time formula
-  // (travelSeconds(), shared with recon/transport — "座標之間的距離" per the
-  // user's own suggestion), and the player explicitly chooses how many ships
-  // of each type and how much metal/crystal to commit, instead of the old
-  // flow which just created a same-instant, resource-empty new planet.
-  // Sending 0 ships and 0 resources remains fully valid (matches the user's
-  // explicit note that a completely unequipped landing "也是一種玩法") — it's
-  // just no longer the ONLY option, and it still takes the travel time.
+  // exploration), and the player explicitly chooses how many ships of each
+  // type and how much metal/crystal to commit, instead of the old flow which
+  // just created a same-instant, resource-empty new planet.
+  //
+  // Travel time now uses its OWN formula, colonizationTravelSeconds() (see
+  // the COLONIZATION_* constants near the top of the file) — deliberately
+  // NOT the shared travelSeconds() used by recon/transport/attack, per a
+  // later explicit user request to make colonization feel like a much
+  // bigger civilization-scale commitment (days, not minutes) without
+  // affecting the pace of ordinary fleet movement.
+  //
+  // Colonization also now REQUIRES committing at least one 殖民母艦
+  // (mothership, LV4 tech) — per explicit user request that colonizing be
+  // gated behind a genuine milestone investment rather than something any
+  // fleet can do casually. A discovered/known planet with no mothership
+  // available simply stays listed (known-planets / exploration log) with an
+  // explanatory message instead of a colonize button — see the two render
+  // sites below (renderExplorationLog / renderKnownPlanets) — so nothing is
+  // lost, colonizing it just waits until a mothership exists. The mothership
+  // is consumed entirely on arrival (does not return home, does not join
+  // the new colony's starting fleet) — see resolveOneColonization(), which
+  // deliberately does NOT reference mothership_ships_sent at all.
+  //
+  // Sending 0 of the OTHER ship types and 0 resources remains fully valid
+  // (matches the user's explicit note that a completely unequipped landing
+  // "也是一種玩法") — only the mothership has a hard minimum of 1.
   //
   // Whatever is committed does NOT return to the origin planet the way a
   // transport mission's ships do — it's a one-way trip that becomes the new
-  // colony's STARTING fleet/resources. While in flight, the committed ships
-  // are excluded from the origin planet's "home" count via a dedicated
-  // fleetColonizingCount() tally (see currentFleetTotal()), the same pattern
-  // already used for away/exploring/building — never actually decremented
-  // from planet.scout_count/etc, exactly like every other away-fleet state.
+  // colony's STARTING fleet/resources (except the mothership itself, which
+  // is consumed rather than transferred — see above). While in flight, the
+  // committed ships are excluded from the origin planet's "home" count via a
+  // dedicated fleetColonizingCount() tally (see currentFleetTotal()), the
+  // same pattern already used for away/exploring/building — never actually
+  // decremented from planet.scout_count/etc, exactly like every other
+  // away-fleet state. Per explicit user request, the mothership counts
+  // toward the shared fleet total/cap identically to every other ship type
+  // while in flight (currentFleetTotal() is fully generic over
+  // Object.keys(SHIP_TYPES), so this needed no special-casing there).
   // ============================================================
 
   let pendingColonizeContext = null; // { coord, explorationId }
 
   function openColonizeModal(coord, explorationId) {
     pendingColonizeContext = { coord, explorationId: explorationId || null };
-    const travelSec = travelSeconds(planet.coord, coord);
+    const travelSec = colonizationTravelSeconds(planet.coord, coord);
     document.getElementById('colonize-modal-intro').textContent =
-      `確定要在座標 ${coord} 建立新的殖民地嗎?距離約需航程 ${formatDuration(travelSec)}。下方選擇要攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航;也可以全部留 0,輕裝出發。`;
+      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後即完成使命、隨之消耗,不會返航也不會留在新殖民地);下方也可選擇額外攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。`;
+    document.getElementById('colonize-mothership').value = 1;
     ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal'].forEach(id => {
       document.getElementById(id).value = 0;
     });
@@ -4859,6 +4991,7 @@
   });
   document.getElementById('colonize-modal-ok').addEventListener('click', async () => {
     if (!pendingColonizeContext) return;
+    const mothership = parseInt(document.getElementById('colonize-mothership').value, 10) || 0;
     const scout = parseInt(document.getElementById('colonize-scout').value, 10) || 0;
     const fighter = parseInt(document.getElementById('colonize-fighter').value, 10) || 0;
     const transport = parseInt(document.getElementById('colonize-transport').value, 10) || 0;
@@ -4867,7 +5000,9 @@
     const msg = document.getElementById('colonize-modal-msg');
     msg.className = 'attack-msg';
 
-    if (scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership < 1) { msg.textContent = '殖民必須指派至少 1 艘殖民母艦'; return; }
+    if (mothership > (planet.mothership_count || 0)) { msg.textContent = `你在家只有 ${planet.mothership_count || 0} 艘殖民母艦`; return; }
     if (scout > (planet.scout_count || 0)) { msg.textContent = `你在家只有 ${planet.scout_count || 0} 艘偵察機`; return; }
     if (fighter > (planet.fighter_count || 0)) { msg.textContent = `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機`; return; }
     if (transport > (planet.transport_count || 0)) { msg.textContent = `你在家只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
@@ -4878,7 +5013,7 @@
     const okBtn = document.getElementById('colonize-modal-ok');
     okBtn.disabled = true;
     try {
-      await launchColonization(coord, explorationId, { scout, fighter, transport, metal, crystal });
+      await launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal });
       closeColonizeModal();
     } catch (err) {
       console.error('Launch colonization error:', err);
@@ -4888,8 +5023,8 @@
     }
   });
 
-  async function launchColonization(coord, explorationId, { scout, fighter, transport, metal, crystal }) {
-    const travelSec = travelSeconds(planet.coord, coord);
+  async function launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal }) {
+    const travelSec = colonizationTravelSeconds(planet.coord, coord);
     const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
 
     // Optimistically deduct committed resources AND ships now, same pattern
@@ -4912,6 +5047,7 @@
     // Reported by the user via a screenshot showing 總數 685 / 600, which
     // traced back to exactly this: 685 = 600 (home, unchanged) + 85
     // (committed ships double-counted through the colonizing bucket).
+    planet.mothership_count = (planet.mothership_count || 0) - mothership;
     planet.scout_count = (planet.scout_count || 0) - scout;
     planet.fighter_count = (planet.fighter_count || 0) - fighter;
     planet.transport_count = (planet.transport_count || 0) - transport;
@@ -4928,6 +5064,7 @@
         player_name: planet.player_name,
         origin_planet_id: planet.id,
         target_coord: coord,
+        mothership_ships_sent: mothership,
         scout_ships_sent: scout,
         fighter_ships_sent: fighter,
         transport_ships_sent: transport,
@@ -4987,6 +5124,13 @@
     // caller whose PATCH actually flips resolved false->true (and gets a
     // non-empty result back) proceeds to create the new planet — guards
     // against two open tabs/devices both trying to resolve the same arrival.
+    //
+    // NOTE: the new `planets` row deliberately does NOT include a
+    // mothership_count field derived from mission.mothership_ships_sent —
+    // per explicit user request, the committed mothership is consumed
+    // entirely on a successful arrival (it neither returns to the origin
+    // planet nor becomes part of the new colony's starting fleet), so it
+    // simply isn't carried forward here at all.
     const claimed = await restRequest(`colonization_missions?id=eq.${mission.id}&resolved=eq.false`, {
       method: 'PATCH',
       body: JSON.stringify({ resolved: true }),
