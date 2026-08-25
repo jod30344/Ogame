@@ -298,10 +298,12 @@
   }
   .fleet-build-row input.build-count-input:focus { border-color: var(--ok); }
   .fleet-build-row button.upgrade { flex: 1; min-width: 88px; }
-  /* 自動生產 toggle — sits right after the "+" stepper. Same footprint as a
+  /* 自動生產/自動升級 toggle — sits right after the "+" stepper (fleet cards)
+     or right beside the "升級到 LVx" button (plot cards, via .plot-upgrade-row
+     — see 自動建築升級, automation_institute LV2). Same footprint as a
      step-btn so the row doesn't reflow, but tinted with --automation (the
      same accent used on the automation_institute plot icon) once active. */
-  .fleet-build-row .auto-btn {
+  .fleet-build-row .auto-btn, .plot-upgrade-row .auto-btn {
     width: 34px;
     height: 34px;
     flex-shrink: 0;
@@ -315,14 +317,16 @@
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
-  .fleet-build-row .auto-btn svg { width: 18px; height: 18px; }
-  .fleet-build-row .auto-btn:hover:not(:disabled) { border-color: var(--automation); color: var(--automation); }
-  .fleet-build-row .auto-btn.active {
+  .fleet-build-row .auto-btn svg, .plot-upgrade-row .auto-btn svg { width: 18px; height: 18px; }
+  .fleet-build-row .auto-btn:hover:not(:disabled), .plot-upgrade-row .auto-btn:hover:not(:disabled) { border-color: var(--automation); color: var(--automation); }
+  .fleet-build-row .auto-btn.active, .plot-upgrade-row .auto-btn.active {
     background: rgba(95,208,224,0.16);
     border-color: var(--automation);
     color: var(--automation);
   }
-  .fleet-build-row .auto-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .fleet-build-row .auto-btn:disabled, .plot-upgrade-row .auto-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .plot-upgrade-row { display: flex; align-items: center; gap: 8px; }
+  .plot-upgrade-row button.upgrade { flex: 1; min-width: 0; }
   .fleet-build-hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
   .fleet-build-hint.error { color: var(--warn); }
   .fleet-build-hint.auto-active { color: var(--automation); }
@@ -1079,14 +1083,16 @@
     turret:       { name: '防空炮塔',     resource: null,      baseCost: { metal: 1800, crystal: 900 },              baseBuildSeconds: 260 },
     // Homestead LV4 unlock — the version's current capstone. Unique per
     // planet like the intel center (see hasAutomationInstitute()). Its own
-    // level unlocks named automation features (LV1: 自動生產艦隊, LV2:
-    // 自動派遣探索) — but per explicit scope, only 自動生產艦隊 (LV1) is
-    // actually wired up; 自動派遣探索 (LV2) remains groundwork-only. Per
-    // explicit user request, this version locks it at LV1 (see
-    // BUILDING_MAX_LEVEL below) — no upgrade path exists yet regardless of
-    // resources — and its LV1 build cost is priced as a MASSIVE investment,
-    // same rationale as the intel center above (a unique, high-impact
-    // building shouldn't be casually affordable).
+    // level unlocks named automation features: LV1 自動生產艦隊 (see
+    // isAutoProducing()), LV2 自動建築升級 (see hasAutoBuildUpgrade()/
+    // maybeAutoQueueBuildingUpgrades()) — both actually wired up now, per
+    // the user's own LV2 design pitch. Per explicit user request, this
+    // version locks it at LV2 (see BUILDING_MAX_LEVEL below) — no upgrade
+    // path exists past that yet regardless of resources — and its LV1
+    // build cost is priced as a MASSIVE investment, same rationale as the
+    // intel center above (a unique, high-impact building shouldn't be
+    // casually affordable); the LV1→2 upgrade inherits the same steep
+    // UNIQUE_BUILDING_COST_GROWTH curve intel_center's own upgrades use.
     automation_institute: { name: '自動化研究院', resource: null, baseCost: { metal: 12000, crystal: 14000 },        baseBuildSeconds: 380 },
     // The colony's civilization-level capstone — always plot 0, never buildable
     // via the empty-plot picker (`pickable: false`) and never demolishable.
@@ -1144,15 +1150,15 @@
   // indefinitely, same as before). Raising a cap here — like
   // MAX_HOMESTEAD_LEVEL — is meant to be a deliberate future-update decision,
   // not something that happens automatically.
-  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 1 };
+  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 2 };
   function buildingMaxLevel(type) {
     return BUILDING_MAX_LEVEL[type] || Infinity;
   }
   // Steeper per-level cost growth for those same two building types — applied
-  // instead of (not on top of) the shared COST_GROWTH above. Only actually
-  // matters for intel_center right now (automation_institute is capped at
-  // LV1, so it never reaches a second level to apply this to) — kept keyed by
-  // type rather than a single constant so it's ready if that cap is ever
+  // instead of (not on top of) the shared COST_GROWTH above. Now applies to
+  // both: intel_center's LV1→2/LV2→3, and automation_institute's LV1→2 (the
+  // one upgrade its own cap allows this version) — kept keyed by type rather
+  // than a single constant so it's ready if either cap is ever
   // raised later.
   const UNIQUE_BUILDING_COST_GROWTH = { intel_center: 2.2, automation_institute: 2.2 };
 
@@ -1326,11 +1332,9 @@
   }
   // 自動化研究院 (Automation Institute) — homestead LV4 unlock, unique per
   // planet like the intel center (see the picker filter in renderPlots()).
-  // Its own level nominally unlocks named automation features (LV1: 自動生產
-  // 艦隊, LV2: 自動派遣探索) but — per explicit scope for this round — only
-  // the building and its leveling are real; the automated behavior those two
-  // names describe is NOT implemented yet (see renderPlots()'s effect-line
-  // text for this building, which says so explicitly to the player).
+  // Its own level unlocks named automation features: LV1 自動生產艦隊 (see
+  // isAutoProducing() below) and LV2 自動建築升級 (see hasAutoBuildUpgrade()/
+  // maybeAutoQueueBuildingUpgrades() further down) — both fully wired up.
   function automationInstituteLevel() {
     const b = ownBuildings.find(b => b.building_type === 'automation_institute');
     return b ? b.level : 0;
@@ -1338,9 +1342,33 @@
   function hasAutomationInstitute() {
     return automationInstituteLevel() > 0;
   }
+  // 自動建築升級 (automated building upgrades) — the automation institute's
+  // LV2 unlock. Per the user's own pitch for what LV2 should actually do:
+  // a per-plot toggle that, while resources allow, keeps queueing that
+  // plot's next upgrade level automatically, one level at a time, forever
+  // (not a one-shot "upgrade once and stop") — see
+  // maybeAutoQueueBuildingUpgrades() for the queueing loop and
+  // toggleAutoBuildUpgrade() for the per-plot on/off switch.
+  function hasAutoBuildUpgrade() {
+    return automationInstituteLevel() >= 2;
+  }
+  // Which building types the LV2 auto-upgrade toggle is even offered for.
+  // Deliberately excludes: 拓荒者營地 (homestead upgrades require real
+  // milestones, not just resources — see queueConstruction()'s homestead
+  // branch — so "just keep spending resources" wouldn't reliably progress
+  // it anyway); 戰情中心 and 自動化研究院 itself (both unique, version-locked
+  // capstone buildings with their own hard BUILDING_MAX_LEVEL cap — letting
+  // the automation institute auto-upgrade ITSELF would also be a strange
+  // bootstrapping loop). Every other building type (the two mines, 農場,
+  // 造船廠, 防空炮塔) is an ordinary, uncapped, resource-only upgrade and is
+  // eligible.
+  function autoUpgradeEligible(type) {
+    return type !== 'homestead' && type !== 'intel_center' && type !== 'automation_institute';
+  }
   // 自動生產艦隊 (automated ship production) — the first of the automation
-  // institute's two named unlocks, now actually wired up (自動派遣探索,
-  // the LV2 unlock, is still a future round). Whether a given ship type is
+  // institute's two named unlocks (自動建築升級, the LV2 unlock, is defined
+  // above — hasAutoBuildUpgrade()/autoUpgradeEligible()). Whether a given
+  // ship type is
   // currently auto-producing on THIS planet is the AND of two things: the
   // player's own toggle, stored on `planet[auto_produce_${type}]` so it
   // survives reloads/device switches, AND the institute still physically
@@ -2541,6 +2569,14 @@
     await resolveConstruction();
     await advanceConstruction();
     await loadConstructionQueue();
+    // 自動建築升級 — needs ownBuildings (loadBuildings, above) and
+    // constructionRows (loadConstructionQueue, just above) both fresh for
+    // this cycle; see maybeAutoQueueBuildingUpgrades()'s own comment for why
+    // a just-completed upgrade's new level won't be visible here until the
+    // FOLLOWING poll (loadBuildings() ran before resolveConstruction() this
+    // same cycle) — same one-poll-cycle lag the rest of this file already
+    // has for anything resolveConstruction() just changed.
+    await maybeAutoQueueBuildingUpgrades();
     await resolveShipQueue();
     await advanceQueue();
     await loadShipQueue();
@@ -2966,6 +3002,85 @@
     }
   }
 
+  // ------------------------------------------------------------
+  // 自動建築升級 (automated building upgrades) — automation_institute's LV2
+  // unlock. Toggling is a straight flip of one `buildings` row's own
+  // `auto_upgrade` column (per-plot, not per-planet — a demolished-and-
+  // rebuilt plot always starts back at false, since it's a brand-new
+  // `buildings` row). The actual queueing happens separately, in
+  // maybeAutoQueueBuildingUpgrades() (called every poll from pollUpdates(),
+  // same pattern as maybeAutoQueueProduction() for ships) — clicking the
+  // toggle here just arms it, then kicks that function immediately below so
+  // the first upgrade goes out on the very next poll tick rather than making
+  // the player wait.
+  // ------------------------------------------------------------
+  async function toggleAutoBuildUpgrade(plotIndex, buildingType, btn) {
+    if (!planet || !hasAutoBuildUpgrade() || !autoUpgradeEligible(buildingType)) return;
+    const building = ownBuildings.find(b => b.plot_index === plotIndex);
+    if (!building) return;
+    const turningOn = !building.auto_upgrade;
+    if (btn) btn.disabled = true;
+    try {
+      await restRequest(`buildings?id=eq.${building.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ auto_upgrade: turningOn }),
+      });
+      building.auto_upgrade = turningOn;
+      showToast(turningOn ? `已開啟${BUILDING_TYPES[buildingType].name}自動升級` : `已關閉${BUILDING_TYPES[buildingType].name}自動升級`, 'success');
+    } catch (err) {
+      console.error('Toggle auto building upgrade error:', err);
+      showToast('自動升級設定失敗,請稍後再試', 'danger');
+    } finally {
+      if (btn) btn.disabled = false;
+      renderPlots();
+      if (turningOn) await maybeAutoQueueBuildingUpgrades();
+    }
+  }
+
+  // Runs every poll cycle (see pollUpdates(), right after loadConstructionQueue()
+  // so ownBuildings/constructionRows are both fresh) and also immediately after
+  // a toggle is switched on. For every plot whose building has auto_upgrade
+  // true, if that plot currently has no queued/building construction order
+  // (manual or automated — either counts as "already has work in the pipe" —
+  // reusing queueConstruction()'s own busy-plot guard), queue its next level.
+  // Per explicit user choice, this keeps climbing one level at a time
+  // indefinitely — NOT a one-shot "upgrade once and turn off" — so it just
+  // silently skips (leaving the flag ON, retrying next poll) whenever
+  // resources can't cover the next level yet, exactly like autoQueueBatch()
+  // does for ships. The one case that DOES turn the flag off on its own is
+  // reaching a genuine version cap (buildingMaxLevel) — retrying forever
+  // there would never succeed, so it's turned off with an explanatory toast
+  // instead. None of the currently-eligible types (the two mines, 農場,
+  // 造船廠, 防空炮塔) are actually capped (buildingMaxLevel returns Infinity
+  // for all of them), so this branch is defensive/future-proofing rather
+  // than something a player can hit today.
+  async function maybeAutoQueueBuildingUpgrades() {
+    if (!planet || !hasAutoBuildUpgrade()) return;
+    for (const building of ownBuildings) {
+      if (!building.auto_upgrade || !autoUpgradeEligible(building.building_type)) continue;
+      if (constructionRows.some(c => c.plot_index === building.plot_index)) continue;
+      const displayLevel = building.building_type === 'shipyard' ? sharedShipyardLevel() : building.level;
+      const targetLevel = displayLevel + 1;
+      if (targetLevel > buildingMaxLevel(building.building_type)) {
+        try {
+          await restRequest(`buildings?id=eq.${building.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ auto_upgrade: false }),
+          });
+          building.auto_upgrade = false;
+          showToast(`${BUILDING_TYPES[building.building_type].name}已達版本上限,自動升級已關閉`, 'info');
+        } catch (err) {
+          console.error('Auto-disable capped building upgrade error:', err);
+        }
+        continue;
+      }
+      const cost = buildingCost(building.building_type, targetLevel);
+      if (localMetal < cost.metal || localCrystal < cost.crystal) continue; // retry next poll
+      await queueConstruction(building.plot_index, building.building_type, targetLevel, null);
+    }
+    renderPlots();
+  }
+
   // Demolishing reuses the same construction_queue table with the sentinel
   // target_level = 0 (a real build never targets level 0), so no schema change
   // is needed. It costs a fraction of the build it undoes and takes real time.
@@ -3292,12 +3407,14 @@
           if (building.level >= 3) intelUnlocks.push('防空炮塔情報');
           effectLine = `已解鎖:${intelUnlocks.join('、')}`;
         } else if (building.building_type === 'automation_institute') {
-          // 自動生產艦隊 (LV1) is now actually wired up — see the auto-produce
-          // toggle on each fleet-roster card. 自動派遣探索 (LV2) is still a
-          // future round, so it keeps the "not live yet" disclaimer while
-          // 自動生產艦隊 no longer needs one.
+          // Cumulative unlock list, same style as intel_center just above —
+          // 自動生產艦隊 (LV1) is the auto-produce toggle on each
+          // fleet-roster card; 自動建築升級 (LV2) is the auto-upgrade toggle
+          // now shown on every eligible plot card below (see
+          // autoUpgradeEligible()). Both are fully live — neither needs a
+          // "not live yet" disclaimer any more.
           effectLine = building.level >= 2
-            ? `已解鎖:自動生產艦隊、自動派遣探索(自動派遣探索功能開發中,尚未實際生效)`
+            ? `已解鎖:自動生產艦隊、自動建築升級`
             : `已解鎖:自動生產艦隊`;
         } else {
           effectLine = `目前產量 +${miningRate(building.building_type, building.level, def.resource).toFixed(1)} / 秒`;
@@ -3311,12 +3428,26 @@
         // checked ahead of the shipyard-specific busy-state message since a
         // capped building can never actually be mid-shipyard-upgrade anyway.
         const atMaxLevel = displayLevel >= buildingMaxLevel(building.building_type);
+        // 自動建築升級 (automation_institute LV2 unlock) — only offered for
+        // ordinary, repeatable-upgrade building types (see
+        // autoUpgradeEligible()) and only once the institute is actually at
+        // LV2 on THIS planet. Sits right beside the manual upgrade button,
+        // same footprint/behavior as the fleet cards' own 自動生產 toggle —
+        // see toggleAutoBuildUpgrade()/maybeAutoQueueBuildingUpgrades().
+        const autoUpgradeAvailable = hasAutoBuildUpgrade() && autoUpgradeEligible(building.building_type);
+        const autoUpgradeOn = !!building.auto_upgrade;
+        const autoUpgradeBtnHtml = autoUpgradeAvailable
+          ? `<button class="auto-btn${autoUpgradeOn ? ' active' : ''}" data-auto-upgrade-plot="${plotIndex}" data-auto-upgrade-type="${building.building_type}" type="button" aria-label="${autoUpgradeOn ? `關閉${def.name}自動升級` : `開啟${def.name}自動升級`}" title="${autoUpgradeOn ? '自動升級中(點擊關閉)' : '自動升級:資源足夠時自動排隊升到下一級,持續進行'}">${AUTO_PRODUCE_ICON}</button>`
+          : '';
         const upgradeBlock = atMaxLevel
           ? `<div class="plot-detail">已達目前版本上限</div>`
           : shipyardUpgradeElsewhere
           ? `<div class="plot-detail">造船科技升級中，請稍候</div>`
           : `<div class="plot-detail">升級費用:${fmt(cost.metal)} 金屬 · ${fmt(cost.crystal)} 晶體 · ${formatDuration(seconds)}</div>
-             <button class="upgrade" data-plot="${plotIndex}" data-type="${building.building_type}" data-level="${targetLevel}" ${affordable ? '' : 'disabled'}>升級到 LV ${targetLevel}</button>`;
+             <div class="plot-upgrade-row">
+               <button class="upgrade" data-plot="${plotIndex}" data-type="${building.building_type}" data-level="${targetLevel}" ${affordable ? '' : 'disabled'}>升級到 LV ${targetLevel}</button>
+               ${autoUpgradeBtnHtml}
+             </div>`;
         html += `<div class="plot-card">
           <div class="plot-label">格 ${plotIndex + 1}</div>
           <div class="plot-head">
@@ -3388,6 +3519,14 @@
         const isDemolish = btn.dataset.cancelDemolish === '1';
         const name = btn.dataset.cancelName;
         onCancelConstructionClick(rowId, status, name, isDemolish, btn);
+      });
+    });
+
+    grid.querySelectorAll('button[data-auto-upgrade-plot]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const plotIndex = parseInt(btn.dataset.autoUpgradePlot, 10);
+        const type = btn.dataset.autoUpgradeType;
+        toggleAutoBuildUpgrade(plotIndex, type, btn);
       });
     });
   }
