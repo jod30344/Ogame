@@ -815,6 +815,25 @@
   </div>
 </div>
 
+<!-- 商貿 — 送糧食給友好/中立的 NPC 換取好感度,同時換回一些金屬/晶體(雙向貿易)。 -->
+<div class="modal-overlay hidden" id="trade-modal">
+  <div class="modal-box">
+    <div class="modal-title">商貿</div>
+    <div class="modal-body">
+      <div class="colonize-intro" id="trade-modal-intro"></div>
+      <div class="ship-input-group">
+        <label class="ship-input-label" for="trade-food-amount">贈送糧食</label>
+        <input type="number" class="ship-input" id="trade-food-amount" min="1" value="100">
+      </div>
+      <div class="attack-msg" id="trade-modal-msg"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="trade-modal-cancel" type="button">取消</button>
+      <button class="modal-confirm" id="trade-modal-ok" type="button">送出</button>
+    </div>
+  </div>
+</div>
+
 <div class="login-screen" id="login-screen">
   <div class="eyebrow">星塵方舟：起源</div>
   <h1>登入你的星球</h1>
@@ -1510,6 +1529,80 @@
   const COLONIZATION_MIN_TRAVEL_SECONDS = 86400;   // 1 day floor
   const COLONIZATION_MAX_TRAVEL_SECONDS = 259200;  // 3 day cap
   const COLONIZATION_SECONDS_PER_COORD_UNIT = 40;
+
+  // ============================================================
+  // NPC / PvE 系統 (Round B, built on top of Round A's 糧食經濟) — NPCs are
+  // ordinary `planets` rows with is_npc=true, discovered through the SAME
+  // rare-discovery roll used for 'empty'/'player' finds (see
+  // resolveOneExploration()'s occRows check and resolveReconMission()'s
+  // is_npc branch). The existing combat pipeline (resolveOneMission) is
+  // fully generic over planets.id/player_name and needs ZERO special-casing
+  // to let an NPC act as either attacker or defender — a raid mission is
+  // just a normal `fleet_missions` row whose attacker happens to be an NPC.
+  // ============================================================
+  const NPC_ARCHETYPES = {
+    // Initial friendliness varies by archetype, per explicit user request
+    // ("依 NPC 類型不同") — deliberately NOT a uniform neutral start.
+    trader:  { name: '商隊', initialFriendliness: 40 },
+    settler: { name: '拓荒聚落', initialFriendliness: 0 },
+    warlord: { name: '軍閥', initialFriendliness: -20 },
+    // Pirates can NEVER be made friendly, per explicit user request ("我覺
+    // 得海盜型的NPC是永遠都在找機會攻擊你的,這個是無法友好的") — 商貿 is
+    // never offered for a pirate regardless of its stored friendliness
+    // number, and its raids fire independent of any player action (see
+    // maybeLaunchNpcRaids() below), unlike every other archetype which only
+    // ever turns hostile in reaction to the player attacking it first.
+    pirate:  { name: '海盜', initialFriendliness: -100 },
+  };
+  // -100..100 scale. At or below this, an NPC is 敵對 (hostile): no 商貿
+  // offered, and it may periodically raid the player (see
+  // maybeLaunchNpcRaids()). Above it, 商貿 is available and the NPC never
+  // raids on its own. Per explicit user request, friendliness can ONLY ever
+  // be raised through an active player goodwill action (商貿) — there is
+  // deliberately NO passive time-based recovery ("我不認為友好度會隨時間慢
+  // 慢回升...你想增加友好度就必須先釋出好意").
+  const HOSTILE_FRIENDLINESS_THRESHOLD = -20;
+  // Purely a cosmetic split between "中立" and "友好" display text above the
+  // hostile line — doesn't unlock or change any mechanic this round.
+  const FRIENDLY_FRIENDLINESS_THRESHOLD = 30;
+  const NPC_MAX_FRIENDLINESS = 100;
+
+  // 商貿 (Commerce/Trade): per explicit user request, a genuinely TWO-WAY
+  // exchange — giving 糧食 returns some 金屬/晶體 too, not just friendliness
+  // ("送農產品換友好度的同時,也拿回一些金屬/晶體"). TRADE_RETURN_RATIO < 1
+  // so it's a real cost, not a free money-printer: the player nets a
+  // friendliness gain plus a partial resource return, not a break-even swap.
+  const TRADE_RETURN_RATIO = 0.6;
+  const TRADE_FRIENDLINESS_GAIN = 8;
+
+  // Hostile-NPC retaliation cadence: real travel time, hours-to-a-day scale,
+  // per explicit user choice ("真實航程節奏(數小時~一天等級)") — its OWN
+  // distance-to-time formula, same floor+linear+cap shape as
+  // colonizationTravelSeconds(), kept deliberately separate from the shared
+  // travelSeconds() so tuning raid pacing can never accidentally speed up or
+  // slow down normal attack/transport/recon travel time.
+  const NPC_RAID_MIN_TRAVEL_SECONDS = 7200;    // 2 hour floor
+  const NPC_RAID_MAX_TRAVEL_SECONDS = 86400;   // 1 day cap
+  const NPC_RAID_SECONDS_PER_COORD_UNIT = 160; // distance 500 -> ~22.2hr, within the requested band
+  function npcRaidTravelSeconds(coordA, coordB) {
+    const distance = Math.abs(coordA - coordB);
+    const raw = distance * NPC_RAID_SECONDS_PER_COORD_UNIT;
+    return Math.min(NPC_RAID_MAX_TRAVEL_SECONDS, Math.max(NPC_RAID_MIN_TRAVEL_SECONDS, Math.round(raw)));
+  }
+  // A hostile NPC only ever has ONE raid in flight against a given player at
+  // a time (see maybeLaunchNpcRaids()'s in-flight check, mirroring the
+  // double-launch guards used elsewhere) — actual pacing comes from the
+  // travel-time formula above; this chance just keeps the exact LAUNCH
+  // moment from feeling perfectly deterministic the instant it's eligible
+  // again, same "skip this cycle, retry next poll" idiom 自動生產 already uses.
+  const NPC_RAID_LAUNCH_CHANCE_PER_POLL = 0.15;
+  // Never sends the NPC's entire fleet in one raid, so a hostile NPC that
+  // wins can keep raiding again rather than being a one-shot threat. If it
+  // LOSES, resolveOneMission()'s existing combat math already handles that
+  // exactly like a player's own fleet would (0 survivors on defender_win) —
+  // NPCs get no special-cased combat treatment either way.
+  const NPC_RAID_FLEET_FRACTION = 0.5;
+
   const MAX_QUEUE_DOTS = 40;
   const MAX_SHIPS_PER_ORDER = 1000;
   const MAX_QUEUED_ORDERS_SHOWN = 4;
@@ -1750,6 +1843,8 @@
   let explorationLog = [];     // resolved explorations (history) for this planet's owner
   let knownPlanetRows = [];    // this player's known-planets registry (player-wide, not per-planet)
   let colonizationRows = [];   // in-flight (unresolved) colonization missions launched from this planet
+  let npcPlanetRows = [];      // ALL NPC `planets` rows (is_npc=true) — small table, refreshed whole each poll
+  let npcReputationRows = [];  // this player's own npc_reputation rows (player-wide, not per-planet)
 
   // BUG FIX (reported by the user via a screenshot showing 總數 705/600 with
   // several ship-production orders actively building/queued despite the
@@ -2454,6 +2549,7 @@
     await loadBattleLog();
     await resolveArrivedExplorations();
     await loadExplorationData();
+    await loadNpcData();
     await loadKnownPlanets();
     await resolveArrivedColonizations();
     await loadColonizationMissions();
@@ -2491,6 +2587,11 @@
     // instead of waiting for the next poll.
     await maybeAutoQueueProduction();
     await loadShipQueue();
+    // Runs last, same reasoning as maybeAutoQueueProduction() above: needs
+    // cachedMissions (loadFleetMovements) and npcReputationRows/
+    // npcPlanetRows (loadNpcData) freshly loaded this cycle before its
+    // in-flight-raid check can be trusted.
+    await maybeLaunchNpcRaids();
   }
 
   // Gate offline catch-up per planet id (not a single global flag) so
@@ -3993,6 +4094,17 @@
         return;
       }
 
+      // Attacking ANY NPC immediately marks it hostile, per explicit user
+      // request ("如果你攻擊它就會視你為敵人") — done here, at the moment
+      // the attack actually commits, not at resolution time (the fleet
+      // hasn't even arrived yet, but the NPC's stance flips the instant the
+      // player chooses to attack). Pirates are already permanently at the
+      // hostile floor, so this is a no-op for them either way.
+      let justTurnedHostile = false;
+      if (defenderPlanet.is_npc) {
+        justTurnedHostile = await setNpcHostile(defenderPlanet);
+      }
+
       planet.fighter_count -= A;
       localFood -= foodCost;
       renderResources();
@@ -4015,7 +4127,9 @@
         }),
       });
 
-      msg.textContent = `艦隊已出發,距離 ${Math.abs(planet.coord - defenderPlanet.coord)},預計 ${formatDuration(travelSec)} 後抵達`;
+      const hostileNote = justTurnedHostile ? `(此舉已讓「${defenderPlanet.player_name}」視你為敵人,牠可能會反擊)` : '';
+      msg.textContent = `艦隊已出發,距離 ${Math.abs(planet.coord - defenderPlanet.coord)},預計 ${formatDuration(travelSec)} 後抵達${hostileNote}`;
+      if (defenderPlanet.is_npc) renderKnownPlanets();
       await loadFleetMovements();
     } catch (err) {
       console.error('Attack error detail:', err);
@@ -4163,6 +4277,132 @@
         showToast(`與 ${mission.attacker_name} 的艦隊同歸於盡`, 'info');
       }
       flashResource('fighter-count', result === 'attacker_win' ? 'danger' : 'success');
+    }
+  }
+
+  // ============================================================
+  // NPC / PvE 系統 (Round B) — see the NPC_ARCHETYPES comment block above for
+  // the overall design. loadNpcData() refreshes the small, whole `planets`
+  // rows where is_npc=true (cheap — a handful of rows total) plus this
+  // player's own npc_reputation rows, every poll cycle.
+  // ============================================================
+  async function loadNpcData() {
+    if (!planet) return;
+    try {
+      const [npcRows, repRows] = await Promise.all([
+        restRequest(`planets?is_npc=eq.true&select=*`),
+        restRequest(`npc_reputation?player_name=eq.${encodeURIComponent(planet.player_name)}&select=*`),
+      ]);
+      npcPlanetRows = npcRows || [];
+      npcReputationRows = repRows || [];
+    } catch (err) {
+      console.error('Load NPC data error:', err);
+    }
+  }
+
+  // Called the first time a player discovers a given NPC (via exploration or
+  // recon) — seeds the relationship at that archetype's own starting
+  // friendliness. Uses resolution=ignore-duplicates (NOT merge-duplicates)
+  // so re-discovering an already-known NPC never resets an existing
+  // relationship back to the archetype default — per explicit user request,
+  // friendliness only ever moves via active player action from here on.
+  async function ensureNpcReputation(npcPlanet) {
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    try {
+      await restRequest(`npc_reputation?on_conflict=player_name,npc_planet_id`, {
+        method: 'POST',
+        headers: { 'Prefer': 'return=representation,resolution=ignore-duplicates' },
+        body: JSON.stringify({
+          player_name: planet.player_name,
+          npc_planet_id: npcPlanet.id,
+          friendliness: archetype.initialFriendliness,
+        }),
+      });
+    } catch (err) {
+      console.error('Ensure NPC reputation error:', err);
+    }
+  }
+
+  // Attacking an NPC (see executeAttack()'s hook) drops it straight to
+  // (just below) the hostile threshold, regardless of where it currently
+  // stood — an attack is always enough to burn the relationship, it can
+  // never make an already-hostile NPC "more" hostile. Returns true only if
+  // this call is what just flipped a previously non-hostile NPC hostile
+  // (used purely for the confirmation message's wording).
+  async function setNpcHostile(npcPlanet) {
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    const repRows = await restRequest(
+      `npc_reputation?player_name=eq.${encodeURIComponent(planet.player_name)}&npc_planet_id=eq.${npcPlanet.id}&select=*`
+    );
+    const rep = repRows && repRows[0];
+    const current = rep ? rep.friendliness : archetype.initialFriendliness;
+    const wasAlreadyHostile = current <= HOSTILE_FRIENDLINESS_THRESHOLD;
+    const hostileValue = Math.min(current, HOSTILE_FRIENDLINESS_THRESHOLD - 1);
+    await restRequest(`npc_reputation?on_conflict=player_name,npc_planet_id`, {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        npc_planet_id: npcPlanet.id,
+        friendliness: hostileValue,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    const repIdx = npcReputationRows.findIndex(r => String(r.npc_planet_id) === String(npcPlanet.id));
+    if (repIdx >= 0) npcReputationRows[repIdx].friendliness = hostileValue;
+    else npcReputationRows.push({ player_name: planet.player_name, npc_planet_id: npcPlanet.id, friendliness: hostileValue });
+    return !wasAlreadyHostile;
+  }
+
+  // Per-poll check: does any NPC this player has discovered currently owe
+  // them a raid? Runs regardless of which of the player's own planets is
+  // currently being viewed (npcReputationRows/npcPlanetRows are player-wide,
+  // not per-planet) and always targets the player's HOME (lowest-id) planet
+  // — same simplification every other attack/transport already uses. A
+  // pirate is ALWAYS eligible (its stored friendliness is cosmetic/locked at
+  // the floor); every other archetype only becomes eligible once the player
+  // has attacked it (see setNpcHostile()) — per explicit user request, no
+  // NPC other than a pirate ever raids unprovoked.
+  async function maybeLaunchNpcRaids() {
+    if (!planet || npcReputationRows.length === 0 || npcPlanetRows.length === 0) return;
+    const homePlanet = myPlanets[0];
+    if (!homePlanet) return;
+    for (const rep of npcReputationRows) {
+      if (rep.friendliness > HOSTILE_FRIENDLINESS_THRESHOLD) continue;
+      const npcPlanet = npcPlanetRows.find(np => String(np.id) === String(rep.npc_planet_id));
+      if (!npcPlanet || (npcPlanet.fighter_count || 0) <= 0) continue;
+      // Already has an unresolved raid in flight against this player from
+      // this exact NPC? Don't stack a second one — cachedMissions is
+      // already scoped to resolved=eq.false for this player's account.
+      const alreadyInFlight = cachedMissions.some(m => String(m.attacker_planet_id) === String(npcPlanet.id));
+      if (alreadyInFlight) continue;
+      if (Math.random() > NPC_RAID_LAUNCH_CHANCE_PER_POLL) continue;
+
+      const shipsSent = Math.max(1, Math.round(npcPlanet.fighter_count * NPC_RAID_FLEET_FRACTION));
+      const travelSec = npcRaidTravelSeconds(npcPlanet.coord, homePlanet.coord);
+      const launchTime = new Date();
+      const arrivalTime = new Date(launchTime.getTime() + travelSec * 1000);
+      try {
+        await restRequest('fleet_missions', {
+          method: 'POST',
+          body: JSON.stringify({
+            mission_type: 'attack',
+            attacker_name: npcPlanet.player_name,
+            defender_name: homePlanet.player_name,
+            attacker_planet_id: npcPlanet.id,
+            defender_planet_id: homePlanet.id,
+            ships_sent: shipsSent,
+            fighter_ships_sent: shipsSent,
+            launch_time: launchTime.toISOString(),
+            arrival_time: arrivalTime.toISOString(),
+            resolved: false,
+          }),
+        });
+        showToast(`警報:「${npcPlanet.player_name}」的艦隊已對你發動突襲(${shipsSent} 艘),預計 ${formatDuration(travelSec)} 後抵達!`, 'danger', 10000);
+        await loadFleetMovements();
+      } catch (err) {
+        console.error('NPC raid launch error:', err);
+      }
     }
   }
 
@@ -4755,11 +4995,17 @@
       // so the exploration log can route the player correctly: colonize it
       // directly (empty), or add it to the known-planets registry (player).
       const occRows = await restRequest(
-        `planets?coord=eq.${foundCoord}&player_name=neq.${encodeURIComponent(mission.player_name)}&select=player_name&limit=1`
+        `planets?coord=eq.${foundCoord}&player_name=neq.${encodeURIComponent(mission.player_name)}&select=id,player_name,is_npc,npc_archetype&limit=1`
       );
       if (occRows && occRows.length > 0) {
-        foundType = 'player';
-        foundPlayerName = occRows[0].player_name;
+        const occ = occRows[0];
+        // A third possible discovery outcome alongside 'player'/'empty' —
+        // an NPC planet, found through this SAME rare-discovery roll, per
+        // explicit user request ("透過探索隨機發現"), not a fixed/
+        // pre-visible coordinate.
+        foundType = occ.is_npc ? 'npc' : 'player';
+        foundPlayerName = occ.player_name;
+        if (occ.is_npc) await ensureNpcReputation(occ);
         await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
           method: 'POST',
           headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
@@ -4852,6 +5098,8 @@
       const lossNote = lostAny ? '(途中有艦艇折損,詳見下方日誌)' : '';
       if (foundType === 'player') {
         showToast(`探索艦隊返航,發現一顆已被「${foundPlayerName}」佔領的星球(座標 ${foundCoord})！已記錄到已知星球清單。${lossNote}`, lostAny ? 'danger' : 'success', 10000);
+      } else if (foundType === 'npc') {
+        showToast(`探索艦隊返航,發現一個 NPC 星球──「${foundPlayerName}」(座標 ${foundCoord})！已記錄到已知星球清單。${lossNote}`, lostAny ? 'danger' : 'success', 10000);
       } else if (foundType === 'empty') {
         showToast(`探索艦隊返航,發現一座無人殖民地(座標 ${foundCoord})！${lossNote}`, lostAny ? 'danger' : 'success', 10000);
       } else {
@@ -4891,6 +5139,26 @@
         `known_planets?owner_player_name=eq.${encodeURIComponent(mission.player_name)}&coord=eq.${mission.target_coord}`,
         { method: 'DELETE' }
       );
+    } else if (targetPlanet.is_npc) {
+      // NPC target — no homestead/turret intel to gather (NPCs have no
+      // buildings this round, see 商貿/known-simplifications notes), just
+      // its current raid-fleet size. Recon also seeds the reputation row on
+      // first contact, same as a fresh exploration discovery.
+      await ensureNpcReputation(targetPlanet);
+      const archetype = NPC_ARCHETYPES[targetPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+      logText = `偵查完成:座標 ${mission.target_coord} 是一個 NPC 星球──${archetype.name}「${targetPlanet.player_name}」。`;
+      await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+        method: 'POST',
+        headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+        body: JSON.stringify({
+          owner_player_name: mission.player_name,
+          coord: mission.target_coord,
+          target_type: 'npc',
+          target_player_name: targetPlanet.player_name,
+          last_scouted_at: new Date().toISOString(),
+          last_fighter_count: targetPlanet.fighter_count || 0,
+        }),
+      });
     } else {
       const [homesteadRows, turretRows] = await Promise.all([
         restRequest(`buildings?planet_id=eq.${targetPlanet.id}&building_type=eq.homestead&select=level&limit=1`),
@@ -5099,19 +5367,26 @@
   // visual slot, no arrow, not clickable) shows "尚未發現任何星球" in its place. Once
   // a known planet exists, the placeholder hides and the real, functional dropdown
   // takes over.
+  // 攻擊的目標名單現在也包含已發現的 NPC(侵略一個 NPC 就是走這同一份下拉選
+  // 單/同一個 executeAttack() 流程),運輸的目標名單則仍然只限玩家——把資源送
+  //給 NPC 不是一個機制,商貿(known-planets 卡片上 NPC 專屬的按鈕)才是 NPC 對
+  // 應的動作。
   function populateTargetSelectors() {
-    const knownPlayerNames = [...new Set(
+    const attackTargetNames = [...new Set(
+      knownPlanetRows.filter(kp => kp.target_type === 'player' || kp.target_type === 'npc').map(kp => kp.target_player_name)
+    )];
+    const transportTargetNames = [...new Set(
       knownPlanetRows.filter(kp => kp.target_type === 'player').map(kp => kp.target_player_name)
     )];
-    const hasKnown = knownPlayerNames.length > 0;
-    ['target-name', 'transport-target-name'].forEach(id => {
+    [['target-name', attackTargetNames], ['transport-target-name', transportTargetNames]].forEach(([id, names]) => {
       const select = document.getElementById(id);
       const placeholderEl = document.getElementById(`${id}-placeholder`);
       if (!select) return;
       const prevValue = select.value;
+      const hasKnown = names.length > 0;
       select.innerHTML = `<option value="">請選擇已知玩家...</option>` +
-        knownPlayerNames.map(name => `<option value="${name}">${name}</option>`).join('');
-      if (knownPlayerNames.includes(prevValue)) select.value = prevValue;
+        names.map(name => `<option value="${name}">${name}</option>`).join('');
+      if (names.includes(prevValue)) select.value = prevValue;
       select.classList.toggle('hidden', !hasKnown);
       if (placeholderEl) placeholderEl.classList.toggle('hidden', hasKnown);
     });
@@ -5131,9 +5406,29 @@
     // 有的戰情中心,馬上就能看到已經偵查過的星球揭露更多欄位,不必重新派出偵察機。
     const myIntelLevel = intelCenterLevel();
     container.innerHTML = knownPlanetRows.map(kp => {
-      const typeLabel = kp.target_type === 'player' ? `玩家「${kp.target_player_name}」` : '無人殖民地';
+      const npcPlanet = kp.target_type === 'npc' ? npcPlanetRows.find(np => np.coord === kp.coord) : null;
+      const npcArchetype = npcPlanet ? (NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler) : null;
+      const typeLabel = kp.target_type === 'player' ? `玩家「${kp.target_player_name}」`
+        : kp.target_type === 'npc' ? `NPC「${kp.target_player_name}」${npcArchetype ? `(${npcArchetype.name})` : ''}`
+        : '無人殖民地';
       let intelLine;
-      if (!kp.last_scouted_at) {
+      if (kp.target_type === 'npc') {
+        // Friendliness lives in npc_reputation (per-player), not on this
+        // known_planets row — always read live rather than cached, since
+        // 商貿/attacking changes it in real time without a fresh recon.
+        const isPirate = npcPlanet && npcPlanet.npc_archetype === 'pirate';
+        const rep = npcPlanet ? npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id)) : null;
+        const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
+        const isHostile = isPirate || friendliness <= HOSTILE_FRIENDLINESS_THRESHOLD;
+        const statusLabel = isPirate ? '海盜·永遠敵對'
+          : isHostile ? `敵對(${friendliness})`
+          : friendliness >= FRIENDLY_FRIENDLINESS_THRESHOLD ? `友好(${friendliness})`
+          : `中立(${friendliness})`;
+        const lines = [`友好度:${statusLabel}`];
+        if (isHostile) lines.push(`<span class="intel-hint">牠可能隨時派艦來襲,記得留意防禦</span>`);
+        if (npcPlanet) lines.push(`上次已知兵力:戰鬥機 ${fmt(npcPlanet.fighter_count || 0)}`);
+        intelLine = lines.join('<br>');
+      } else if (!kp.last_scouted_at) {
         intelLine = '尚未偵查過,情報未知';
       } else {
         const lines = [`上次偵查:${new Date(kp.last_scouted_at).toLocaleString('zh-TW')}`];
@@ -5149,8 +5444,21 @@
       </div>`;
       const transportBtn = kp.target_type === 'player'
         ? `<button class="max-btn" data-transport-to="${kp.target_player_name}" type="button">運輸</button>` : '';
-      const invadeBtn = kp.target_type === 'player'
+      const invadeBtn = (kp.target_type === 'player' || kp.target_type === 'npc')
         ? `<button class="attack-btn" data-invade-to="${kp.target_player_name}" type="button">侵略</button>` : '';
+      // 商貿: only offered for a non-pirate NPC that isn't currently
+      // hostile — per explicit user request, trading is how friendliness is
+      // actively earned, but it's withheld once an NPC views the player as
+      // an enemy (attack it first, then it takes real goodwill to recover —
+      // except a pirate, which never offers this option at all).
+      let tradeBtn = '';
+      if (kp.target_type === 'npc' && npcPlanet && npcPlanet.npc_archetype !== 'pirate') {
+        const rep = npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id));
+        const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
+        if (friendliness > HOSTILE_FRIENDLINESS_THRESHOLD) {
+          tradeBtn = `<button class="max-btn" data-trade="${npcPlanet.coord}" type="button">商貿</button>`;
+        }
+      }
       // Same double-launch guard as the exploration log: a colonization
       // mission targeting this coordinate stays in colonizationRows (and
       // this known_planets row stays around) for the whole flight, only
@@ -5173,7 +5481,7 @@
       return `<div class="explore-log-entry">
         <div class="log-text">座標 ${kp.coord} · ${typeLabel}</div>
         <div class="log-loot">${intelLine}</div>
-        <div class="known-planet-actions">${reconGroup}${transportBtn}${invadeBtn}${colonizeBtn}</div>
+        <div class="known-planet-actions">${reconGroup}${transportBtn}${invadeBtn}${tradeBtn}${colonizeBtn}</div>
       </div>`;
     }).join('');
 
@@ -5204,6 +5512,13 @@
     container.querySelectorAll('button[data-colonize-known]').forEach(btn => {
       btn.addEventListener('click', () => {
         onColonizeKnownClick(parseInt(btn.dataset.colonizeKnown, 10), btn);
+      });
+    });
+    container.querySelectorAll('button[data-trade]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const coord = parseInt(btn.dataset.trade, 10);
+        const npcPlanet = npcPlanetRows.find(np => np.coord === coord);
+        if (npcPlanet) openTradeModal(npcPlanet);
       });
     });
   }
@@ -5444,6 +5759,94 @@
     // keep showing for up to one poll interval, inviting an accidental
     // double-launch to the same coordinate.
     renderExplorationLog();
+    renderKnownPlanets();
+  }
+
+  // ============================================================
+  // 商貿 (Commerce/Trade with a non-hostile NPC) — resolves INSTANTLY,
+  // unlike every fleet mission above. This is a deliberate simplification:
+  // trade is framed as a diplomatic gesture/gift exchange, not a fleet
+  // movement, so it doesn't need its own travel-time/mission-row plumbing.
+  // See "Known simplifications" in the project doc for this and the NPC's
+  // own stockpile being untouched by a trade (the metal/crystal returned is
+  // abstracted, not literally drawn down from the NPC's own `planets` row).
+  // ============================================================
+  let pendingTradeNpcPlanet = null;
+
+  function openTradeModal(npcPlanet) {
+    pendingTradeNpcPlanet = npcPlanet;
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    document.getElementById('trade-modal-intro').textContent =
+      `與「${npcPlanet.player_name}」(${archetype.name})商貿:贈送的糧食會換回約 ${Math.round(TRADE_RETURN_RATIO * 100)}% 價值的金屬與晶體(各半),並提升 ${TRADE_FRIENDLINESS_GAIN} 點友好度(上限 ${NPC_MAX_FRIENDLINESS})。`;
+    document.getElementById('trade-food-amount').value = Math.max(1, Math.min(100, Math.floor(localFood)));
+    const msg = document.getElementById('trade-modal-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    document.getElementById('trade-modal').classList.remove('hidden');
+  }
+  function closeTradeModal() {
+    pendingTradeNpcPlanet = null;
+    document.getElementById('trade-modal').classList.add('hidden');
+  }
+  document.getElementById('trade-modal-cancel').addEventListener('click', closeTradeModal);
+  document.getElementById('trade-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'trade-modal') closeTradeModal();
+  });
+  document.getElementById('trade-modal-ok').addEventListener('click', async () => {
+    if (!pendingTradeNpcPlanet) return;
+    const foodAmount = Math.max(1, Math.floor(parseFloat(document.getElementById('trade-food-amount').value) || 0));
+    const msg = document.getElementById('trade-modal-msg');
+    msg.className = 'attack-msg';
+    if (foodAmount > localFood) { msg.textContent = `糧食不足,目前只有 ${Math.floor(localFood)}`; return; }
+    const okBtn = document.getElementById('trade-modal-ok');
+    okBtn.disabled = true;
+    try {
+      await executeTrade(pendingTradeNpcPlanet, foodAmount);
+      closeTradeModal();
+    } catch (err) {
+      console.error('Trade error:', err);
+      msg.textContent = '商貿失敗:' + ((err && err.message) || String(err));
+    } finally {
+      okBtn.disabled = false;
+    }
+  });
+
+  async function executeTrade(npcPlanet, foodAmount) {
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    const repRows = await restRequest(
+      `npc_reputation?player_name=eq.${encodeURIComponent(planet.player_name)}&npc_planet_id=eq.${npcPlanet.id}&select=*`
+    );
+    const rep = repRows && repRows[0];
+    const currentFriendliness = rep ? rep.friendliness : archetype.initialFriendliness;
+    const newFriendliness = Math.min(NPC_MAX_FRIENDLINESS, currentFriendliness + TRADE_FRIENDLINESS_GAIN);
+    const returnedValue = Math.round(foodAmount * TRADE_RETURN_RATIO);
+    const metalBack = Math.round(returnedValue / 2);
+    const crystalBack = returnedValue - metalBack;
+
+    localFood -= foodAmount;
+    localMetal += metalBack;
+    localCrystal += crystalBack;
+    renderResources();
+    flashResource('food-value', 'danger');
+    flashResource('metal-value', 'success');
+    flashResource('crystal-value', 'success');
+    await saveToServer();
+
+    await restRequest(`npc_reputation?on_conflict=player_name,npc_planet_id`, {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        npc_planet_id: npcPlanet.id,
+        friendliness: newFriendliness,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    const repIdx = npcReputationRows.findIndex(r => String(r.npc_planet_id) === String(npcPlanet.id));
+    if (repIdx >= 0) npcReputationRows[repIdx].friendliness = newFriendliness;
+    else npcReputationRows.push({ player_name: planet.player_name, npc_planet_id: npcPlanet.id, friendliness: newFriendliness });
+
+    showToast(`與「${npcPlanet.player_name}」商貿成功:送出 ${foodAmount} 糧食,換回 ${metalBack} 金屬 · ${crystalBack} 晶體,友好度 +${TRADE_FRIENDLINESS_GAIN}(現為 ${newFriendliness})`, 'success', 8000);
     renderKnownPlanets();
   }
 
