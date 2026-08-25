@@ -1798,8 +1798,8 @@
   // A demolish order (the target_level === 0 sentinel) paid
   // demolishCost(type, <level being torn down>) — that level isn't stored on
   // the row itself, but the building it's demolishing is still sitting in
-  // ownBuildings (untouched) right up until resolveConstruction() actually
-  // deletes it on completion, so its current .level is exactly the value
+  // ownBuildings (untouched) right up until resolveAndAdvanceConstruction()
+  // actually deletes it on completion, so its current .level is exactly the value
   // demolishCost was computed from at queue time.
   function constructionOrderCost(row) {
     if (row.target_level > 0) return buildingCost(row.building_type, row.target_level);
@@ -2566,16 +2566,20 @@
   async function pollUpdates() {
     await loadBuildings();               // needed first: rates depend on it
     catchUpOfflineResources();
-    await resolveConstruction();
-    await advanceConstruction();
+    // resolveAndAdvanceConstruction() catches up the WHOLE construction
+    // queue (every row whose precomputed complete_at has already passed,
+    // in order — see its own design note above), not just one step, so a
+    // long chain of auto-queued upgrades correctly finishes several levels
+    // in one poll after being away, instead of unsticking one row at a time.
+    await resolveAndAdvanceConstruction();
     await loadConstructionQueue();
     // 自動建築升級 — needs ownBuildings (loadBuildings, above) and
     // constructionRows (loadConstructionQueue, just above) both fresh for
     // this cycle; see maybeAutoQueueBuildingUpgrades()'s own comment for why
     // a just-completed upgrade's new level won't be visible here until the
-    // FOLLOWING poll (loadBuildings() ran before resolveConstruction() this
-    // same cycle) — same one-poll-cycle lag the rest of this file already
-    // has for anything resolveConstruction() just changed.
+    // FOLLOWING poll (loadBuildings() ran before resolveAndAdvanceConstruction()
+    // this same cycle) — same one-poll-cycle lag the rest of this file already
+    // has for anything resolveAndAdvanceConstruction() just changed.
     await maybeAutoQueueBuildingUpgrades();
     await resolveShipQueue();
     await advanceQueue();
@@ -2823,88 +2827,191 @@
     }
   }
 
-  // Only one construction can be actively building per planet; promote the oldest queued one when free
-  async function advanceConstruction() {
-    if (!planet) return;
-    try {
-      const rows = await restRequest(`construction_queue?planet_id=eq.${planet.id}&status=neq.done&order=queued_at.asc`);
-      const alreadyBuilding = (rows || []).some(r => r.status === 'building');
-      if (alreadyBuilding) return;
-      const next = (rows || []).find(r => r.status === 'queued');
-      if (!next) return;
-      const startedAt = new Date();
-      const completeAt = new Date(startedAt.getTime() + next.build_seconds * 1000);
-      await restRequest(`construction_queue?id=eq.${next.id}&status=eq.queued`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: 'building',
-          started_at: startedAt.toISOString(),
-          complete_at: completeAt.toISOString(),
-        }),
-      });
-    } catch (err) {
-      console.error('Advance construction error:', err);
-    }
+  // ------------------------------------------------------------
+  // 離線排隊補完 (offline-safe construction scheduling) — NEW this round.
+  //
+  // OLD model: only the single "building" row had a real started_at/
+  // complete_at, assigned the moment advanceConstruction() promoted it. A
+  // "queued" row had NEITHER until it was promoted, and promotion only ever
+  // happened inside a live poll — so a whole chain of queued upgrades could
+  // only ever advance ONE step per poll, and NONE of it progressed at all
+  // while the game was closed (a player who queued several auto-upgrades
+  // then closed the tab would come back to find only whichever row was
+  // already "building" at closing time had finished — everything behind it
+  // hadn't even started counting). Reported directly by the user after
+  // seeing this with 自動建築升級 queueing several plots at once.
+  //
+  // NEW model: computeConstructionSchedule() chains a NEW row's
+  // started_at/complete_at off whatever's already pending for this planet
+  // the moment it's queued (queueConstruction()/queueDemolish() below), so
+  // the whole queue's timing is nailed down up front as an unbroken chain
+  // of real wall-clock durations — no "promotion" event needed to start a
+  // row's clock. resolveAndAdvanceConstruction() (replacing the old
+  // advanceConstruction()/resolveConstruction() pair) just catches up:
+  // resolve every row whose complete_at has already passed (applying its
+  // effect), in order, looping so several completions can land in one poll
+  // after a long time away — then flip the new front of the queue to
+  // 'building' once its own precomputed window has started. Still only one
+  // row is ever actively "building" at a time (the shared-per-planet
+  // construction-crew pacing is unchanged, per explicit user choice to keep
+  // that design) — this only changes WHEN each row's clock starts, not how
+  // many can run in parallel.
+  // ------------------------------------------------------------
+
+  // What a NEW row's own started_at/complete_at would be if queued right
+  // now, chained off the planet's current not-done rows (constructionRows,
+  // already scoped to this planet) in queued_at order — the last one in
+  // that chain's complete_at becomes this new row's start; an empty queue
+  // means it starts immediately.
+  function computeConstructionSchedule(seconds) {
+    const pending = [...constructionRows].sort((a, b) => new Date(a.queued_at) - new Date(b.queued_at));
+    const last = pending[pending.length - 1];
+    const startedAt = last ? new Date(last.complete_at) : new Date();
+    const completeAt = new Date(startedAt.getTime() + seconds * 1000);
+    return { startedAt, completeAt };
   }
 
-  async function resolveConstruction() {
-    if (!planet) return;
-    const buildingRow = constructionRows.find(r => r.status === 'building');
-    if (!buildingRow) return;
-    if (new Date(buildingRow.complete_at).getTime() > Date.now()) return;
+  // Applies one completed construction_queue row's effect to `buildings` —
+  // extracted from the old resolveConstruction() so the loop below can call
+  // it for every row it resolves in a single poll, not just one.
+  async function applyConstructionEffect(buildingRow) {
+    const def = BUILDING_TYPES[buildingRow.building_type];
+    const existing = ownBuildings.find(b => b.plot_index === buildingRow.plot_index);
 
-    try {
-      const claimed = await restRequest(`construction_queue?id=eq.${buildingRow.id}&status=eq.building`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'done' }),
-      });
-      if (!claimed || claimed.length === 0) return;
-
-      const def = BUILDING_TYPES[buildingRow.building_type];
-      const existing = ownBuildings.find(b => b.plot_index === buildingRow.plot_index);
-
-      if (buildingRow.target_level === 0) {
-        // Demolish sentinel: clear the plot.
-        if (existing) {
-          await restRequest(`buildings?id=eq.${existing.id}`, { method: 'DELETE' });
-        }
-        showToast(`${def.name} 已拆除，格位空出`, 'info');
-      } else if (existing) {
-        if (buildingRow.building_type === 'shipyard') {
-          // Shared tech level: propagate the new level to every shipyard on the planet.
-          const shipyardRows = ownBuildings.filter(b => b.building_type === 'shipyard');
-          for (const sy of shipyardRows) {
-            await restRequest(`buildings?id=eq.${sy.id}`, {
-              method: 'PATCH',
-              body: JSON.stringify({ level: buildingRow.target_level }),
-            });
-          }
-        } else {
-          await restRequest(`buildings?id=eq.${existing.id}`, {
+    if (buildingRow.target_level === 0) {
+      // Demolish sentinel: clear the plot.
+      if (existing) {
+        await restRequest(`buildings?id=eq.${existing.id}`, { method: 'DELETE' });
+      }
+      showToast(`${def.name} 已拆除，格位空出`, 'info');
+    } else if (existing) {
+      if (buildingRow.building_type === 'shipyard') {
+        // Shared tech level: propagate the new level to every shipyard on the planet.
+        const shipyardRows = ownBuildings.filter(b => b.building_type === 'shipyard');
+        for (const sy of shipyardRows) {
+          await restRequest(`buildings?id=eq.${sy.id}`, {
             method: 'PATCH',
             body: JSON.stringify({ level: buildingRow.target_level }),
           });
         }
-        showToast(`${def.name} 已完工，升級到 LV${buildingRow.target_level}`, 'success');
       } else {
-        // Brand-new building. A new shipyard comes online already at the shared
-        // tech level (the tech is already researched) rather than starting at LV1.
-        const initialLevel = buildingRow.building_type === 'shipyard'
-          ? Math.max(1, sharedShipyardLevel())
-          : buildingRow.target_level;
-        await restRequest('buildings', {
-          method: 'POST',
-          body: JSON.stringify({
-            planet_id: planet.id,
-            plot_index: buildingRow.plot_index,
-            building_type: buildingRow.building_type,
-            level: initialLevel,
-          }),
+        await restRequest(`buildings?id=eq.${existing.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ level: buildingRow.target_level }),
         });
-        showToast(`${def.name} 已完工（LV${initialLevel}）`, 'success');
       }
+      showToast(`${def.name} 已完工，升級到 LV${buildingRow.target_level}`, 'success');
+    } else {
+      // Brand-new building. A new shipyard comes online already at the shared
+      // tech level (the tech is already researched) rather than starting at LV1.
+      const initialLevel = buildingRow.building_type === 'shipyard'
+        ? Math.max(1, sharedShipyardLevel())
+        : buildingRow.target_level;
+      await restRequest('buildings', {
+        method: 'POST',
+        body: JSON.stringify({
+          planet_id: planet.id,
+          plot_index: buildingRow.plot_index,
+          building_type: buildingRow.building_type,
+          level: initialLevel,
+        }),
+      });
+      showToast(`${def.name} 已完工（LV${initialLevel}）`, 'success');
+    }
+  }
+
+  // Replaces the old advanceConstruction()/resolveConstruction() pair (see
+  // the design note above). Bounded loop (not "while true") purely as a
+  // defensive guard against an unexpected runaway chain — a real planet's
+  // queue is never anywhere close to 25 rows deep.
+  async function resolveAndAdvanceConstruction() {
+    if (!planet) return;
+    for (let guard = 0; guard < 25; guard++) {
+      let rows;
+      try {
+        rows = await restRequest(`construction_queue?planet_id=eq.${planet.id}&status=neq.done&order=queued_at.asc`);
+      } catch (err) {
+        console.error('Resolve/advance construction error:', err);
+        return;
+      }
+      if (!rows || rows.length === 0) return;
+      const front = rows[0];
+      if (new Date(front.complete_at).getTime() <= Date.now()) {
+        try {
+          // Claim guard mirrors every other completion path in this file — a
+          // concurrent completion (another tab, or a cancel that raced this
+          // same poll) can't be double-applied.
+          const claimed = await restRequest(`construction_queue?id=eq.${front.id}&status=eq.${front.status}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: 'done' }),
+          });
+          if (!claimed || claimed.length === 0) return;
+          await applyConstructionEffect(front);
+        } catch (err) {
+          console.error('Resolve construction error:', err);
+          return;
+        }
+        continue; // more rows may also already be overdue after a long absence — keep going
+      }
+      if (front.status === 'queued' && new Date(front.started_at).getTime() <= Date.now()) {
+        try {
+          await restRequest(`construction_queue?id=eq.${front.id}&status=eq.queued`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: 'building' }),
+          });
+        } catch (err) {
+          console.error('Advance construction error:', err);
+        }
+      }
+      return; // front hasn't completed yet — nothing more to do this cycle
+    }
+  }
+
+  // Called after a construction_queue row is cancelled (mid-chain or at the
+  // front) so every row still behind it shifts its precomputed
+  // started_at/complete_at EARLIER to fill the gap the cancelled row left,
+  // instead of keeping a now-too-generous schedule that still waits for a
+  // row that no longer exists. The currently-"building" front row (if any,
+  // and if it's not the one just cancelled) keeps its own real schedule
+  // untouched — only rows behind it get re-chained.
+  async function rechainConstructionQueue() {
+    if (!planet) return;
+    let rows;
+    try {
+      rows = await restRequest(`construction_queue?planet_id=eq.${planet.id}&status=neq.done&order=queued_at.asc`);
     } catch (err) {
-      console.error('Resolve construction error:', err);
+      console.error('Rechain construction queue error:', err);
+      return;
+    }
+    if (!rows || rows.length === 0) return;
+    let cursor, startIndex;
+    if (rows[0].status === 'building') {
+      cursor = new Date(rows[0].complete_at);
+      startIndex = 1;
+    } else {
+      // Nothing is currently building (e.g. the previously-building row was
+      // the one just cancelled) — the new front starts fresh, right now.
+      cursor = new Date();
+      startIndex = 0;
+    }
+    const updates = [];
+    for (let i = startIndex; i < rows.length; i++) {
+      const row = rows[i];
+      const startedAt = cursor;
+      const completeAt = new Date(startedAt.getTime() + row.build_seconds * 1000);
+      const newStatus = startedAt.getTime() <= Date.now() ? 'building' : 'queued';
+      if (row.started_at !== startedAt.toISOString() || row.complete_at !== completeAt.toISOString() || row.status !== newStatus) {
+        updates.push(restRequest(`construction_queue?id=eq.${row.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ started_at: startedAt.toISOString(), complete_at: completeAt.toISOString(), status: newStatus }),
+        }));
+      }
+      cursor = completeAt;
+    }
+    try {
+      await Promise.all(updates);
+    } catch (err) {
+      console.error('Rechain construction queue write error:', err);
     }
   }
 
@@ -2982,6 +3089,11 @@
     await saveToServer();
 
     const seconds = buildingSeconds(buildingType, targetLevel);
+    // Chain this new row's own started_at/complete_at off whatever's
+    // already pending for this planet, right now — see
+    // computeConstructionSchedule()'s own comment for why (offline-safe
+    // queue scheduling, this round).
+    const { startedAt, completeAt } = computeConstructionSchedule(seconds);
     try {
       await restRequest('construction_queue', {
         method: 'POST',
@@ -2992,10 +3104,12 @@
           target_level: targetLevel,
           build_seconds: seconds,
           queued_at: new Date().toISOString(),
+          started_at: startedAt.toISOString(),
+          complete_at: completeAt.toISOString(),
           status: 'queued',
         }),
       });
-      await advanceConstruction();
+      await resolveAndAdvanceConstruction();
       await loadConstructionQueue();
     } catch (err) {
       console.error('Queue construction error:', err);
@@ -3107,6 +3221,7 @@
     await saveToServer();
 
     const seconds = demolishSeconds(buildingType, level);
+    const { startedAt, completeAt } = computeConstructionSchedule(seconds);
     try {
       await restRequest('construction_queue', {
         method: 'POST',
@@ -3117,10 +3232,12 @@
           target_level: 0,
           build_seconds: seconds,
           queued_at: new Date().toISOString(),
+          started_at: startedAt.toISOString(),
+          complete_at: completeAt.toISOString(),
           status: 'queued',
         }),
       });
-      await advanceConstruction();
+      await resolveAndAdvanceConstruction();
       await loadConstructionQueue();
     } catch (err) {
       console.error('Queue demolish error:', err);
@@ -3188,7 +3305,10 @@
         await saveToServer();
       }
       showToast(`已取消工程,退回 ${fmt(refundMetal)} 金屬 · ${fmt(refundCrystal)} 晶體`, 'success');
-      await advanceConstruction();
+      // Rechain (not just advance) — a cancelled row anywhere in the chain,
+      // not only the front one, needs everything behind it to shift earlier
+      // to fill the gap. See rechainConstructionQueue()'s own comment.
+      await rechainConstructionQueue();
       await loadConstructionQueue();
     } catch (err) {
       console.error('Cancel construction order error:', err);
@@ -3225,13 +3345,16 @@
     }
     if (construction && construction.status === 'queued') {
       const position = queuedList.findIndex(r => r.id === construction.id) + 1;
+      // Now precomputed at queue time (see computeConstructionSchedule()),
+      // so this is a real ETA, not just "waiting for a poll to promote it."
+      const waitRemainingSec = Math.max(0, (new Date(construction.started_at).getTime() - Date.now()) / 1000);
       return `<div class="plot-card homestead-card">
         <div class="plot-label">格 1 · 拓荒者營地 · 排隊中(第 ${position} 順位)</div>
         <div class="plot-head">
           <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
           <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
         </div>
-        <div class="plot-detail">等待全星球的工程排到它</div>
+        <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始施工</div>
         ${renderCancelConstructionButton(construction)}
       </div>`;
     }
@@ -3371,13 +3494,16 @@
         const position = queuedList.findIndex(r => r.id === construction.id) + 1;
         const def = BUILDING_TYPES[construction.building_type];
         const isDemolish = construction.target_level === 0;
+        // Now precomputed at queue time (see computeConstructionSchedule()),
+        // so this is a real ETA, not just "waiting for a poll to promote it."
+        const waitRemainingSec = Math.max(0, (new Date(construction.started_at).getTime() - Date.now()) / 1000);
         html += `<div class="plot-card">
           <div class="plot-label">格 ${plotIndex + 1} · 排隊中(第 ${position} 順位)</div>
           <div class="plot-head">
             <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
             <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
           </div>
-          <div class="plot-detail">等待全星球的工程排到它</div>
+          <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始${isDemolish ? '拆除' : '施工'}</div>
           ${renderCancelConstructionButton(construction)}
         </div>`;
       } else if (building) {
