@@ -362,6 +362,15 @@
   .cancel-order-btn:hover:not(:disabled) { border-color: var(--warn); background: #2a1414; }
   .cancel-order-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .cancel-order-btn.small { margin-top: 0; padding: 6px 10px; font-size: 11.5px; flex-shrink: 0; }
+  .recall-status-note {
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 11.5px;
+    padding: 6px 10px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 
   .attack-card {
     background: var(--bg-panel);
@@ -1753,6 +1762,36 @@
     '偵測到微弱的求救訊號,趕到時只剩下一些可回收的殘骸。',
     '長時間的深空巡弋後,艦隊帶著滿載的貨艙返航。',
   ];
+  // Per explicit user request ("我認為發現星球後，應該有不一樣的航行日誌"): a
+  // mission that rolls a rare discovery (see `foundCoord` in
+  // resolveOneExploration()) should read as a genuinely different kind of
+  // event in the log, not just the same ambient loot flavor line as every
+  // ordinary return — the discovery is the whole point of that mission, and
+  // it deserves its own send-off line. Split into 3 pools matching the 3
+  // possible `foundType` outcomes, so the flavor text foreshadows what the
+  // player is about to see (a colonizable coordinate, another player's
+  // colony, or an NPC) rather than reading identically regardless of what
+  // was actually found.
+  const EXPLORATION_DISCOVERY_LOG_LINES = {
+    empty: [
+      '穿越一片從未標記在星圖上的星域,感測器捕捉到一顆尚無人踏足的行星。',
+      '艦隊在深空中意外脫離既定航線,眼前赫然出現一顆適合殖民的星球。',
+      '導航系統回報一組陌生座標的微弱重力訊號——那裡,有一顆全新的世界。',
+      '穿過一團稀薄的星際塵埃後,一顆尚未被任何人認領的星球出現在眼前。',
+    ],
+    player: [
+      '遠距掃描捕捉到規律的人造光點——那裡,已經有人先一步落腳了。',
+      '艦隊在陌生星域邊緣偵測到另一支文明的殖民訊號。',
+      '導航員從雜訊中辨識出人工建築的輪廓,這片星域早已被人佔據。',
+      '偵測到穩定的能源訊號,追蹤過去才發現早已是別人的家園。',
+    ],
+    npc: [
+      '感測器擷取到一段無法辨識來源的通訊訊號,似乎來自某個陌生的文明。',
+      '艦隊在深空中與一支素未謀面的勢力擦身而過,對方的存在讓人心生警惕。',
+      '偵測到規律卻陌生的能量波動,那裡棲息著一支不屬於任何已知玩家的勢力。',
+      '導航系統標出一處異常座標,靠近後才發現早已有其他居民定居於此。',
+    ],
+  };
 
   // Demolishing refunds nothing but is cheaper/faster than the build it undoes —
   // enough friction that respec-ing a plot is a real decision, not a free reset.
@@ -2001,16 +2040,31 @@
   // Generic per-ship-type "away" count (attack/transport missions). Scouts
   // never appear in fleet_missions (they only ever travel via exploration),
   // so this naturally returns 0 for 'scout' without any special-casing.
+  // BUG FIX (reported by the user: viewing a colony showed a fleet total that
+  // looked like every planet's ships added together): this used to filter
+  // `cachedMissions` by `attacker_name === planet.player_name` alone. Since a
+  // player's `player_name` is the SAME across every planet they own, that
+  // matched EVERY attack/transport mission launched from ANY of the player's
+  // planets, not just the one currently being viewed — so a fighter/transport
+  // sent out from planet A would count as "away" against planet B's fleet
+  // total/cap too, and vice versa. `fleet_missions` has carried its own
+  // `attacker_planet_id` column since early in this project (see
+  // migration.sql, already backfilled for pre-existing rows) specifically to
+  // disambiguate which of a multi-planet player's colonies a mission actually
+  // departed from — this was simply never wired into this particular check.
+  // Scoping on `attacker_planet_id` (kept alongside the original player_name
+  // check as cheap defense-in-depth) makes each planet's "away" count reflect
+  // only ships that actually left FROM that planet.
   function fleetAwayCount(shipType) {
     if (!planet) return 0;
     if (shipType === 'fighter') {
       return cachedMissions
-        .filter(m => m.attacker_name === planet.player_name && (m.mission_type || 'attack') !== 'transport')
+        .filter(m => m.attacker_name === planet.player_name && String(m.attacker_planet_id) === String(planet.id) && (m.mission_type || 'attack') !== 'transport')
         .reduce((sum, m) => sum + (m.fighter_ships_sent || m.ships_sent || 0), 0);
     }
     if (shipType === 'transport') {
       return cachedMissions
-        .filter(m => m.attacker_name === planet.player_name && m.mission_type === 'transport')
+        .filter(m => m.attacker_name === planet.player_name && String(m.attacker_planet_id) === String(planet.id) && m.mission_type === 'transport')
         .reduce((sum, m) => sum + (m.transport_ships_sent || 0), 0);
     }
     return 0;
@@ -4850,7 +4904,15 @@
         : '';
       const label = `殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}${m.recalled ? '(已召回)' : ''}`;
       const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
-      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-colonize="${m.id}" type="button">召回艦隊</button>` : '';
+      // Once a mission is past its recall cutoff (already "on the way back",
+      // per the mirrored-travel-time model), swap the button for a plain,
+      // non-interactive "返航中" label in the same slot rather than just
+      // leaving the space blank — per explicit user request. Already-recalled
+      // missions don't need this: their `(已召回)` note in the label above
+      // already communicates status, so no note is shown here for those.
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-colonize="${m.id}" type="button">召回艦隊</button>`
+        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
       return `<div class="movement-entry colonize">
         <div>${label}</div>
         <div class="movement-right">
@@ -4882,7 +4944,13 @@
       // mission ever gets a recall button — a defender has no fleet to call
       // back here, and transport recall isn't in scope (see project notes).
       const canRecall = isOutgoing && !isTransport && !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
-      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-attack="${m.id}" type="button">召回艦隊</button>` : '';
+      // Same "返航中" placeholder treatment as colonization below — only for
+      // the slot a recall button would otherwise occupy (outgoing, non-
+      // transport, not already recalled), once past the recall cutoff.
+      const pastRecallCutoff = isOutgoing && !isTransport && !m.recalled && !computeRecallPlan(m.launch_time, m.arrival_time);
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-attack="${m.id}" type="button">召回艦隊</button>`
+        : (pastRecallCutoff ? `<span class="recall-status-note">返航中</span>` : '');
       return `<div class="movement-entry ${cls}">
         <div>${label}</div>
         <div class="movement-right">
@@ -5428,9 +5496,11 @@
     totalLoot = Math.round(totalLoot * recallFraction);
     const metalShare = Math.round(totalLoot * (0.4 + Math.random() * 0.2));
     const crystalShare = Math.max(0, totalLoot - metalShare);
-    let logText = mission.recalled
-      ? '探索艦隊中途被召回,提前折返。'
-      : EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
+    // logText itself isn't picked yet for a non-recalled mission — whether it
+    // reads as an ordinary loot return or a discovery (and which discovery
+    // flavor pool) depends on the `foundCoord`/`foundType` roll just below,
+    // so the actual pick happens right after that roll completes.
+    let logText = mission.recalled ? '探索艦隊中途被召回,提前折返。' : null;
 
     // Discovery chance now scales with scouts specifically (see
     // fleetExplorationBonus) rather than overall fleet size — a lone scout
@@ -5473,6 +5543,15 @@
       } else {
         foundType = 'empty';
       }
+    }
+
+    // Now that foundType is settled, pick the actual log line: a discovery
+    // (any of the 3 foundType outcomes) gets its own dedicated flavor pool
+    // instead of the generic loot-return one, per explicit user request.
+    if (!mission.recalled) {
+      logText = foundType
+        ? EXPLORATION_DISCOVERY_LOG_LINES[foundType][Math.floor(Math.random() * EXPLORATION_DISCOVERY_LOG_LINES[foundType].length)]
+        : EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
     }
 
     // Mission attrition (see ATTRITION_TIERS comment above): a chance of
@@ -5761,7 +5840,9 @@
       const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後返航' : '即將返航';
       const recalledNote = m.recalled ? '(已召回)' : '';
       const canRecall = !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
-      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-exploration="${m.id}" type="button">召回艦隊</button>` : '';
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-exploration="${m.id}" type="button">召回艦隊</button>`
+        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
       if (m.mode === 'recon') {
         return `<div class="waiting-entry"><span>偵查中:座標 ${m.target_coord} · ${m.scout_ships_sent || 0} 艘偵察機 · ${etaText}${recalledNote}</span>${recallBtn}</div>`;
       }
