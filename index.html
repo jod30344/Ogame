@@ -388,6 +388,8 @@
   .ship-input-label svg { width: 13px; height: 13px; flex-shrink: 0; }
   .explore-slots-note { font-size: 12px; color: var(--text-dim); margin: -4px 0 10px; }
   .explore-slots-note.full { color: var(--warn); }
+  .explore-food-estimate { font-size: 12px; color: var(--text-dim); width: 100%; margin: -2px 0 6px; }
+  .explore-food-estimate.insufficient { color: var(--warn); }
   .attack-card input:focus, .attack-card select:focus { border-color: var(--warn); }
   .attack-card select.target-input { flex: 1; min-width: 200px; max-width: 100%; }
   .attack-card select.target-input option[value=""] { color: var(--text-dim); }
@@ -928,6 +930,7 @@
         <label class="ship-input-label" for="explore-transport-count"></label>
         <input type="number" class="ship-input" id="explore-transport-count" min="0" value="0">
       </div>
+      <div class="explore-food-estimate" id="explore-food-estimate"></div>
       <button class="max-btn" id="explore-smart-formation-btn" type="button">智能編隊</button>
       <button class="upgrade" id="explore-launch-btn" type="button">派遣探索</button>
       <div class="attack-msg" id="explore-msg"></div>
@@ -2779,6 +2782,11 @@
     const foodRateEl = document.getElementById('food-rate');
     foodRateEl.textContent = `${foodNet >= 0 ? '+' : ''}${foodNet.toFixed(1)} / 秒`;
     foodRateEl.classList.toggle('negative', foodNet < 0);
+    // Keeps the explore-section live 糧食 cost preview's "現有" figure fresh
+    // even when the player isn't touching the ship-count/tier inputs — food
+    // drains continuously from fleet upkeep, and renderResources() already
+    // runs every tick.
+    updateExploreFoodEstimate();
     // Ship-type home counts no longer have a per-card DOM node to update here
     // (the fleet-roster card dropped its "在家" badge — see renderFleetRoster)
     // — renderFleetOverview()/renderFleetTopBar() below fully rebuilds the top
@@ -5108,6 +5116,35 @@
       const home = planet[`${type}_count`] || 0;
       input.value = Math.floor(home * SMART_FORMATION_FRACTION);
     });
+    updateExploreFoodEstimate();
+  });
+
+  // Live 糧食 cost preview — per explicit user request, recalculated the
+  // instant a ship-count field or the duration tier changes, so a player
+  // knows whether they can afford the trip BEFORE clicking 派遣探索 instead
+  // of only finding out from onExploreClick()'s rejection message. Reads the
+  // same three inputs and selectedExplorationTier that onExploreClick()
+  // itself reads, through the same missionFoodCost() used for the real
+  // (authoritative) check — this is purely a preview, it doesn't gate
+  // anything on its own. Also re-run from renderResources() (ticks every
+  // 500ms) so the "現有" figure stays live even if the player just leaves
+  // the fields untouched while food drains from fleet upkeep.
+  function updateExploreFoodEstimate() {
+    const el = document.getElementById('explore-food-estimate');
+    if (!el) return;
+    const tier = EXPLORATION_TIERS[selectedExplorationTier];
+    if (!tier) { el.textContent = ''; return; }
+    const scoutCount = Math.max(0, parseInt(document.getElementById('explore-scout-count').value, 10) || 0);
+    const fighterCount = Math.max(0, parseInt(document.getElementById('explore-fighter-count').value, 10) || 0);
+    const transportCount = Math.max(0, parseInt(document.getElementById('explore-transport-count').value, 10) || 0);
+    const foodCost = missionFoodCost({ scout: scoutCount, fighter: fighterCount, transport: transportCount }, tier.seconds);
+    const insufficient = foodCost > localFood;
+    el.textContent = `預估消耗糧食:${foodCost}(現有 ${Math.floor(localFood)})${insufficient ? ' · 糧食不足' : ''}`;
+    el.classList.toggle('insufficient', insufficient);
+  }
+  ['explore-scout-count', 'explore-fighter-count', 'explore-transport-count'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.addEventListener('input', updateExploreFoodEstimate);
   });
 
   function renderExplorationTierPicker() {
@@ -5128,8 +5165,10 @@
       btn.addEventListener('click', () => {
         selectedExplorationTier = btn.dataset.tier;
         container.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+        updateExploreFoodEstimate();
       });
     });
+    updateExploreFoodEstimate();
   }
 
   document.getElementById('explore-launch-btn').addEventListener('click', onExploreClick);
