@@ -462,6 +462,7 @@
   }
   .movement-entry.outgoing { border-left: 3px solid var(--metal); }
   .movement-entry.colonize { border-left: 3px solid var(--colonize); }
+  .movement-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .movement-eta { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
   .movement-entry.incoming .movement-eta { color: var(--warn); }
   @keyframes pulseWarn {
@@ -2727,6 +2728,69 @@
     return Math.round(totalShips * FOOD_UPKEEP_PER_SHIP_PER_SECOND * durationSeconds);
   }
 
+  // ------------------------------------------------------------
+  // 中途召回 (mid-flight fleet recall) — per explicit user request, any
+  // dispatched fleet (探索/偵查/攻擊/殖民) can be called back before it
+  // arrives instead of being irrevocably committed for its whole travel
+  // time. Modeled as a mirror of the outbound leg: however long the fleet
+  // has already been flying when recalled is exactly how long it takes to
+  // fly back (same distance, same speed) — so recalling early is nearly
+  // free, recalling near the original arrival barely saves anything, and
+  // past the HALFWAY point of the original trip, turning around would
+  // arrive LATER than just letting the fleet complete its original journey
+  // (2×elapsed > original duration) — so recall is refused past that point
+  // (computeRecallPlan returns null; the caller should just let it resolve
+  // normally). 糧食, pre-paid in full for the ORIGINAL round-trip duration
+  // at launch, is refunded for whatever fraction of that duration the
+  // recall now skips (see missionFoodCost diff at each recall call site).
+  function computeRecallPlan(launchTimeIso, arrivalTimeIso) {
+    const launch = new Date(launchTimeIso).getTime();
+    const arrival = new Date(arrivalTimeIso).getTime();
+    const now = Date.now();
+    const originalDurationMs = arrival - launch;
+    if (!(originalDurationMs > 0)) return null;
+    const elapsedMs = Math.min(Math.max(now - launch, 0), originalDurationMs);
+    if (elapsedMs >= originalDurationMs / 2) return null; // past the point of no return
+    const newDurationMs = elapsedMs * 2;
+    return {
+      newArrivalTime: new Date(launch + newDurationMs),
+      originalDurationSeconds: originalDurationMs / 1000,
+      newDurationSeconds: newDurationMs / 1000,
+      completionFraction: originalDurationMs > 0 ? newDurationMs / originalDurationMs : 0,
+    };
+  }
+
+  // Shared by all three recall call sites: PATCHes the mission row's
+  // arrival_time to the mirrored earlier time and marks it recalled (so the
+  // eventual resolve function knows to scale/skip outcomes appropriately),
+  // then credits back whatever 糧食 the shortened trip no longer needs.
+  // Returns the applied plan + refund on success, or null if the claim-guard
+  // PATCH found the row already resolved/changed by someone else (a genuine
+  // race, e.g. it arrived a moment before the recall click landed).
+  async function applyRecall(table, mission, shipCounts) {
+    const plan = computeRecallPlan(mission.launch_time || mission.launched_at, mission.arrival_time);
+    if (!plan) return null;
+    const originalCost = missionFoodCost(shipCounts, plan.originalDurationSeconds);
+    const newCost = missionFoodCost(shipCounts, plan.newDurationSeconds);
+    const refund = Math.max(0, originalCost - newCost);
+    const claimed = await restRequest(`${table}?id=eq.${mission.id}&resolved=eq.false`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        arrival_time: plan.newArrivalTime.toISOString(),
+        recalled: true,
+        recall_completion_fraction: plan.completionFraction,
+      }),
+    });
+    if (!claimed || claimed.length === 0) return null;
+    if (refund > 0) {
+      localFood += refund;
+      renderResources();
+      flashResource('food-value', 'success');
+      await saveToServer();
+    }
+    return { plan, refund };
+  }
+
   function scheduleSave() {
     saveTimer = setTimeout(async () => {
       await saveToServer();
@@ -4291,7 +4355,7 @@
 
     openConfirmModal(
       '確認攻擊',
-      `確定要派出 ${shipsSentInput} 艘戰鬥機攻擊「${targetName}」嗎？艦隊出發後無法召回。`,
+      `確定要派出 ${shipsSentInput} 艘戰鬥機攻擊「${targetName}」嗎？出發後仍可在航程過半前中途召回。`,
       '派出艦隊',
       executeAttack
     );
@@ -4413,6 +4477,45 @@
     }
   }
 
+  // 中途召回一支已出發的攻擊艦隊 — see computeRecallPlan()'s comment for the
+  // mirrored-travel-time model. Only meaningful for the attacker's own view
+  // of their OUTGOING mission (renderMovementLog() only ever renders this
+  // button on `isOutgoing` entries), and never fires for transport rows.
+  async function recallAttackMission(mission) {
+    const shipCounts = { fighter: mission.fighter_ships_sent || mission.ships_sent || 0 };
+    const result = await applyRecall('fleet_missions', mission, shipCounts);
+    if (!result) {
+      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
+      return;
+    }
+    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
+    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
+    showToast(`艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
+    await loadFleetMovements();
+  }
+
+  // A recalled attack's counterpart to resolveOneMission()'s normal battle
+  // resolution — the fleet just comes home, untouched, since it never
+  // reached the defender.
+  async function resolveRecalledAttack(mission) {
+    const rows = mission.attacker_planet_id
+      ? await restRequest(`planets?id=eq.${mission.attacker_planet_id}&select=*`)
+      : await restRequest(`planets?player_name=eq.${encodeURIComponent(mission.attacker_name)}&select=*&order=id.asc`);
+    const attackerPlanet = rows && rows[0];
+    if (!attackerPlanet) return;
+    const shipsBack = mission.fighter_ships_sent || mission.ships_sent || 0;
+    await restRequest(`planets?id=eq.${attackerPlanet.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fighter_count: attackerPlanet.fighter_count + shipsBack }),
+    });
+    if (planet && String(planet.id) === String(attackerPlanet.id)) {
+      planet.fighter_count = attackerPlanet.fighter_count + shipsBack;
+      renderResources();
+      flashResource('fighter-count', 'success');
+      showToast(`艦隊已安全返航(中途召回,「${mission.defender_name}」未受任何影響)`, 'success');
+    }
+  }
+
   async function resolveArrivedMissions() {
     if (!planet) return;
     try {
@@ -4442,6 +4545,17 @@
       body: JSON.stringify({ resolved: true }),
     });
     if (!claimed || claimed.length === 0) return;
+
+    // A recalled attack never reaches the defender at all — turned back
+    // before arrival, so no battle happens, no turret/fighter comparison,
+    // no loot, no battles-log row. Unlike exploration/recon, attack has no
+    // separate mid-journey "attrition" mechanic of its own to prorate — the
+    // battle itself IS the only risk, and it simply never occurs — so the
+    // fighters sent just return home in full.
+    if (mission.recalled) {
+      await resolveRecalledAttack(mission);
+      return;
+    }
 
     // Resolve by the exact planet id the mission recorded when it launched
     // (multi-planet players can own several); fall back to name lookup only
@@ -4734,10 +4848,15 @@
       const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0)
         ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體`
         : '';
-      const label = `殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}`;
+      const label = `殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}${m.recalled ? '(已召回)' : ''}`;
+      const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
+      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-colonize="${m.id}" type="button">召回艦隊</button>` : '';
       return `<div class="movement-entry colonize">
         <div>${label}</div>
-        <div class="movement-eta">${etaText}</div>
+        <div class="movement-right">
+          <div class="movement-eta">${etaText}</div>
+          ${recallBtn}
+        </div>
       </div>`;
     }).join('');
 
@@ -4756,16 +4875,36 @@
       } else {
         cls = isOutgoing ? 'outgoing' : 'incoming';
         label = isOutgoing
-          ? `你的艦隊(${count} 艘)正飛往 ${m.defender_name}`
+          ? `你的艦隊(${count} 艘)正飛往 ${m.defender_name}${m.recalled ? '(已召回)' : ''}`
           : `${m.attacker_name} 的艦隊(${count} 艘)正逼近你的星球!`;
       }
+      // Only the attacker's own view of their OUTGOING, non-transport
+      // mission ever gets a recall button — a defender has no fleet to call
+      // back here, and transport recall isn't in scope (see project notes).
+      const canRecall = isOutgoing && !isTransport && !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
+      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-attack="${m.id}" type="button">召回艦隊</button>` : '';
       return `<div class="movement-entry ${cls}">
         <div>${label}</div>
-        <div class="movement-eta">${etaText}</div>
+        <div class="movement-right">
+          <div class="movement-eta">${etaText}</div>
+          ${recallBtn}
+        </div>
       </div>`;
     }).join('');
 
     container.innerHTML = colonizeEntries + missionEntries;
+    container.querySelectorAll('button[data-recall-colonize]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = colonizationRows.find(m => String(m.id) === String(btn.dataset.recallColonize));
+        if (mission) recallColonizationMission(mission);
+      });
+    });
+    container.querySelectorAll('button[data-recall-attack]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = cachedMissions.find(m => String(m.id) === String(btn.dataset.recallAttack));
+        if (mission) recallAttackMission(mission);
+      });
+    });
     renderFleetOverview();
   }
 
@@ -5199,7 +5338,7 @@
     const transportNote = transportCount > 0 ? '' : '(未帶運輸艦,即使有發現也無法帶回任何戰利品)';
     openConfirmModal(
       '確認派遣探索',
-      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)}),需消耗 ${foodCost} 糧食。${transportNote}艦隊出發後無法召回。`,
+      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)}),需消耗 ${foodCost} 糧食。${transportNote}出發後仍可在航程過半前中途召回。`,
       '派遣',
       () => launchExploration(scoutCount, fighterCount, transportCount)
     );
@@ -5278,16 +5417,26 @@
     // No transport along = nothing to carry loot home in, so the roll is
     // forced to zero regardless of what capacity math would otherwise say.
     const lootRoll = capacity > 0 ? (lootFloor + Math.random() * (1 - lootFloor)) * tier.lootFactor : 0;
-    const totalLoot = Math.round(capacity * lootRoll);
+    let totalLoot = Math.round(capacity * lootRoll);
+    // A RECALLED mission turned back before completing its full route — it
+    // only ever explored/gathered for `recall_completion_fraction` of the
+    // originally planned trip, so everything a full mission would have
+    // rolled (loot, rare-discovery odds, attrition odds — see below) scales
+    // down by that same fraction rather than being granted in full or
+    // skipped outright. Per explicit user choice ("仍照比例擲骰").
+    const recallFraction = mission.recalled ? Math.max(0, Math.min(1, mission.recall_completion_fraction || 0)) : 1;
+    totalLoot = Math.round(totalLoot * recallFraction);
     const metalShare = Math.round(totalLoot * (0.4 + Math.random() * 0.2));
     const crystalShare = Math.max(0, totalLoot - metalShare);
-    let logText = EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
+    let logText = mission.recalled
+      ? '探索艦隊中途被召回,提前折返。'
+      : EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
 
     // Discovery chance now scales with scouts specifically (see
     // fleetExplorationBonus) rather than overall fleet size — a lone scout
     // squadron can still stumble onto something without transport/fighter
     // support, but at a much lower chance.
-    let rareChance = tier.rareChance + bonus.rareBonus;
+    let rareChance = (tier.rareChance + bonus.rareBonus) * recallFraction;
     if (!mission.transport_ships_sent) rareChance *= NO_TRANSPORT_RARE_CHANCE_MULTIPLIER;
 
     let foundCoord = null;
@@ -5333,7 +5482,7 @@
     // folded into this mission's log line for the player to read afterward.
     let scoutLost = 0, fighterLost = 0, transportLost = 0;
     const attritionTier = ATTRITION_TIERS[mission.duration_tier] || ATTRITION_TIERS.short;
-    if (Math.random() < attritionTier.encounterChance) {
+    if (Math.random() < attritionTier.encounterChance * recallFraction) {
       const defensePower = (mission.fighter_ships_sent || 0) * 1 + (mission.scout_ships_sent || 0) * SCOUT_DEFENSE_POWER;
       const roll = rollAttrition(defensePower, attritionTier.threatMin, attritionTier.threatMax);
       if (roll.survived) {
@@ -5417,86 +5566,97 @@
   // refresh that entry's intel — no loot, no new discoveries, just an updated
   // snapshot of who's there and how big their fleet looks right now.
   async function resolveReconMission(mission) {
-    const targetRows = await restRequest(`planets?coord=eq.${mission.target_coord}&select=*&order=id.asc&limit=1`);
-    const targetPlanet = targetRows && targetRows[0];
-    const isOwnPlanet = targetPlanet && targetPlanet.player_name === mission.player_name;
-
+    const recallFraction = mission.recalled ? Math.max(0, Math.min(1, mission.recall_completion_fraction || 0)) : 1;
     let logText;
-    if (!targetPlanet) {
-      logText = `偵查完成:座標 ${mission.target_coord} 目前無人殖民。`;
-      await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
-        method: 'POST',
-        headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
-        body: JSON.stringify({
-          owner_player_name: mission.player_name,
-          coord: mission.target_coord,
-          target_type: 'empty',
-          target_player_name: null,
-          last_scouted_at: new Date().toISOString(),
-        }),
-      });
-    } else if (isOwnPlanet) {
-      // You colonized it yourself in the meantime — it's not a "known
-      // target" any more, it's just one of your own colonies now.
-      logText = `偵查完成:座標 ${mission.target_coord} 是你自己的星球,已從清單移除。`;
-      await restRequest(
-        `known_planets?owner_player_name=eq.${encodeURIComponent(mission.player_name)}&coord=eq.${mission.target_coord}`,
-        { method: 'DELETE' }
-      );
-    } else if (targetPlanet.is_npc) {
-      // NPC target — no homestead/turret intel to gather (NPCs have no
-      // buildings this round, see 商貿/known-simplifications notes), just
-      // its current raid-fleet size. Recon also seeds the reputation row on
-      // first contact, same as a fresh exploration discovery.
-      await ensureNpcReputation(targetPlanet);
-      const archetype = NPC_ARCHETYPES[targetPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
-      logText = `偵查完成:座標 ${mission.target_coord} 是一個 NPC 星球──${archetype.name}「${targetPlanet.player_name}」。`;
-      await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
-        method: 'POST',
-        headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
-        body: JSON.stringify({
-          owner_player_name: mission.player_name,
-          coord: mission.target_coord,
-          target_type: 'npc',
-          target_player_name: targetPlanet.player_name,
-          last_scouted_at: new Date().toISOString(),
-          last_fighter_count: targetPlanet.fighter_count || 0,
-        }),
-      });
+    // A RECALLED recon fleet turned back before ever reaching the target
+    // coordinate, so it does NOT get to refresh that entry's intel — that's
+    // the actual objective of the trip, and unlike attrition risk (a hazard
+    // of travel itself, still rolled below, just scaled down), there's no
+    // "partial" version of arriving and looking around.
+    if (mission.recalled) {
+      logText = `偵察艦隊中途被召回,提前折返,未能完成對座標 ${mission.target_coord} 的偵查。`;
     } else {
-      const [homesteadRows, turretRows] = await Promise.all([
-        restRequest(`buildings?planet_id=eq.${targetPlanet.id}&building_type=eq.homestead&select=level&limit=1`),
-        restRequest(`buildings?planet_id=eq.${targetPlanet.id}&building_type=eq.turret&select=level`),
-      ]);
-      const targetHomesteadLevel = homesteadRows && homesteadRows[0] ? homesteadRows[0].level : 1;
-      const targetTurretCount = (turretRows || []).length;
-      const targetTurretPower = (turretRows || []).reduce((sum, b) => sum + turretPower(b.level), 0);
-      logText = `偵查完成:座標 ${mission.target_coord} 目前由「${targetPlanet.player_name}」控制。`;
-      await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
-        method: 'POST',
-        headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
-        body: JSON.stringify({
-          owner_player_name: mission.player_name,
-          coord: mission.target_coord,
-          target_type: 'player',
-          target_player_name: targetPlanet.player_name,
-          last_scouted_at: new Date().toISOString(),
-          last_fighter_count: targetPlanet.fighter_count || 0,
-          last_transport_count: targetPlanet.transport_count || 0,
-          last_scout_count: targetPlanet.scout_count || 0,
-          last_homestead_level: targetHomesteadLevel,
-          last_turret_count: targetTurretCount,
-          last_turret_power: targetTurretPower,
-        }),
-      });
+      const targetRows = await restRequest(`planets?coord=eq.${mission.target_coord}&select=*&order=id.asc&limit=1`);
+      const targetPlanet = targetRows && targetRows[0];
+      const isOwnPlanet = targetPlanet && targetPlanet.player_name === mission.player_name;
+
+      if (!targetPlanet) {
+        logText = `偵查完成:座標 ${mission.target_coord} 目前無人殖民。`;
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: mission.target_coord,
+            target_type: 'empty',
+            target_player_name: null,
+            last_scouted_at: new Date().toISOString(),
+          }),
+        });
+      } else if (isOwnPlanet) {
+        // You colonized it yourself in the meantime — it's not a "known
+        // target" any more, it's just one of your own colonies now.
+        logText = `偵查完成:座標 ${mission.target_coord} 是你自己的星球,已從清單移除。`;
+        await restRequest(
+          `known_planets?owner_player_name=eq.${encodeURIComponent(mission.player_name)}&coord=eq.${mission.target_coord}`,
+          { method: 'DELETE' }
+        );
+      } else if (targetPlanet.is_npc) {
+        // NPC target — no homestead/turret intel to gather (NPCs have no
+        // buildings this round, see 商貿/known-simplifications notes), just
+        // its current raid-fleet size. Recon also seeds the reputation row on
+        // first contact, same as a fresh exploration discovery.
+        await ensureNpcReputation(targetPlanet);
+        const archetype = NPC_ARCHETYPES[targetPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+        logText = `偵查完成:座標 ${mission.target_coord} 是一個 NPC 星球──${archetype.name}「${targetPlanet.player_name}」。`;
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: mission.target_coord,
+            target_type: 'npc',
+            target_player_name: targetPlanet.player_name,
+            last_scouted_at: new Date().toISOString(),
+            last_fighter_count: targetPlanet.fighter_count || 0,
+          }),
+        });
+      } else {
+        const [homesteadRows, turretRows] = await Promise.all([
+          restRequest(`buildings?planet_id=eq.${targetPlanet.id}&building_type=eq.homestead&select=level&limit=1`),
+          restRequest(`buildings?planet_id=eq.${targetPlanet.id}&building_type=eq.turret&select=level`),
+        ]);
+        const targetHomesteadLevel = homesteadRows && homesteadRows[0] ? homesteadRows[0].level : 1;
+        const targetTurretCount = (turretRows || []).length;
+        const targetTurretPower = (turretRows || []).reduce((sum, b) => sum + turretPower(b.level), 0);
+        logText = `偵查完成:座標 ${mission.target_coord} 目前由「${targetPlanet.player_name}」控制。`;
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: mission.target_coord,
+            target_type: 'player',
+            target_player_name: targetPlanet.player_name,
+            last_scouted_at: new Date().toISOString(),
+            last_fighter_count: targetPlanet.fighter_count || 0,
+            last_transport_count: targetPlanet.transport_count || 0,
+            last_scout_count: targetPlanet.scout_count || 0,
+            last_homestead_level: targetHomesteadLevel,
+            last_turret_count: targetTurretCount,
+            last_turret_power: targetTurretPower,
+          }),
+        });
+      }
     }
 
     // Mission attrition — a recon fleet is scouts-only, so its entire defense
     // is however many scouts went along (see ATTRITION_TIERS comment above
     // resolveOneExploration). Same "losses only, never a failed recon" shape:
-    // the intel gathered above is already committed regardless.
+    // the intel gathered above (if any — see the recalled branch above) is
+    // already committed regardless.
     let scoutLost = 0;
-    if (Math.random() < RECON_ATTRITION.encounterChance) {
+    if (Math.random() < RECON_ATTRITION.encounterChance * recallFraction) {
       const defensePower = (mission.scout_ships_sent || 0) * SCOUT_DEFENSE_POWER;
       const roll = rollAttrition(defensePower, RECON_ATTRITION.threatMin, RECON_ATTRITION.threatMax);
       if (roll.survived) {
@@ -5529,12 +5689,39 @@
       planet.scout_count = (launchPlanet.scout_count || 0) + scoutBack;
       renderResources();
       flashResource('scout-count', scoutLost > 0 ? 'danger' : 'success');
+      const lossNote = scoutLost > 0 ? `(途中損失 ${scoutLost} 艘偵察機)` : '';
       showToast(
-        `偵察艦隊返航,已更新座標 ${mission.target_coord} 的情報${scoutLost > 0 ? `(途中損失 ${scoutLost} 艘偵察機)` : ''}`,
+        mission.recalled
+          ? `偵察艦隊已因召回返航,未能更新座標 ${mission.target_coord} 的情報${lossNote}`
+          : `偵察艦隊返航,已更新座標 ${mission.target_coord} 的情報${lossNote}`,
         scoutLost > 0 ? 'danger' : 'success'
       );
     }
     await loadKnownPlanets();
+  }
+
+  // 中途召回一支已出發的探索或偵查艦隊 — works for both `discover` and
+  // `recon` mode rows since both live in exploration_missions and share the
+  // same schedule fields. See computeRecallPlan()'s comment for the
+  // mirrored-travel-time model, and resolveOneExploration()/
+  // resolveReconMission()'s `recallFraction` handling for how the eventual
+  // resolution scales down (rather than skips or fully grants) whatever
+  // rare-discovery/loot/attrition outcomes a full mission would have rolled.
+  async function recallExplorationMission(mission) {
+    const shipCounts = {
+      scout: mission.scout_ships_sent || 0,
+      fighter: mission.fighter_ships_sent || 0,
+      transport: mission.transport_ships_sent || 0,
+    };
+    const result = await applyRecall('exploration_missions', mission, shipCounts);
+    if (!result) {
+      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
+      return;
+    }
+    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
+    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
+    showToast(`艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
+    await loadExplorationData();
   }
 
   async function loadExplorationData() {
@@ -5572,12 +5759,21 @@
     progressContainer.innerHTML = explorationRows.map(m => {
       const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
       const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後返航' : '即將返航';
+      const recalledNote = m.recalled ? '(已召回)' : '';
+      const canRecall = !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
+      const recallBtn = canRecall ? `<button class="cancel-order-btn small" data-recall-exploration="${m.id}" type="button">召回艦隊</button>` : '';
       if (m.mode === 'recon') {
-        return `<div class="waiting-entry">偵查中:座標 ${m.target_coord} · ${m.scout_ships_sent || 0} 艘偵察機 · ${etaText}</div>`;
+        return `<div class="waiting-entry"><span>偵查中:座標 ${m.target_coord} · ${m.scout_ships_sent || 0} 艘偵察機 · ${etaText}${recalledNote}</span>${recallBtn}</div>`;
       }
       const tier = EXPLORATION_TIERS[m.duration_tier] || EXPLORATION_TIERS.short;
-      return `<div class="waiting-entry">${tier.name}中:${m.scout_ships_sent || 0} 艘偵察機 · ${m.fighter_ships_sent} 艘戰鬥機 · ${m.transport_ships_sent} 艘運輸艦 · ${etaText}</div>`;
+      return `<div class="waiting-entry"><span>${tier.name}中:${m.scout_ships_sent || 0} 艘偵察機 · ${m.fighter_ships_sent} 艘戰鬥機 · ${m.transport_ships_sent} 艘運輸艦 · ${etaText}${recalledNote}</span>${recallBtn}</div>`;
     }).join('');
+    progressContainer.querySelectorAll('button[data-recall-exploration]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = explorationRows.find(m => String(m.id) === String(btn.dataset.recallExploration));
+        if (mission) recallExplorationMission(mission);
+      });
+    });
 
     logContainer.innerHTML = explorationLog.length === 0 ? '' : explorationLog.map(m => {
       if (m.mode === 'recon') {
@@ -5830,7 +6026,7 @@
   function onReconClick(coord, scoutCount, btn) {
     openConfirmModal(
       '確認偵查',
-      `派出 ${scoutCount} 艘偵察機前往座標 ${coord} 偵查最新情報,艦隊出發後無法召回。`,
+      `派出 ${scoutCount} 艘偵察機前往座標 ${coord} 偵查最新情報,出發後仍可在航程過半前中途召回。`,
       '派遣偵查',
       () => launchRecon(coord, scoutCount, btn)
     );
@@ -6170,6 +6366,74 @@
     return colonizationRows.reduce((sum, r) => sum + (r[field] || 0), 0);
   }
 
+  // 中途召回一支已出發的殖民艦隊 — see computeRecallPlan()'s comment for the
+  // mirrored-travel-time model. Unlike exploration/recon, colonization has no
+  // separate mid-journey attrition mechanic to prorate (see "Colonization
+  // missions do not roll mission attrition" in the project notes) — the
+  // committed fleet/resources just come home in full, no new colony created.
+  async function recallColonizationMission(mission) {
+    const shipCounts = {
+      mothership: mission.mothership_ships_sent || 0,
+      scout: mission.scout_ships_sent || 0,
+      fighter: mission.fighter_ships_sent || 0,
+      transport: mission.transport_ships_sent || 0,
+    };
+    const result = await applyRecall('colonization_missions', mission, shipCounts);
+    if (!result) {
+      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
+      return;
+    }
+    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
+    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
+    showToast(`殖民艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
+    await loadColonizationMissions();
+  }
+
+  // A recalled colonization's counterpart to resolveOneColonization()'s
+  // normal "create the new planet" path — the committed mothership/ships/
+  // resources return to the ORIGIN planet instead (the mothership was only
+  // ever consumed on an actual arrival, so a recalled one simply comes back
+  // like any other ship type here). Deliberately does NOT mark a
+  // `source_exploration_id` row `claimed` — the colonization never
+  // completed, so that log entry's "殖民這顆星球" button should be free to
+  // reappear (renderExplorationLog()'s pendingColonize lookup already stops
+  // finding this mission once colonizationRows excludes resolved rows).
+  async function resolveRecalledColonization(mission) {
+    const rows = await restRequest(`planets?id=eq.${mission.origin_planet_id}&select=*`);
+    const originPlanet = rows && rows[0];
+    if (!originPlanet) return;
+    const res = await currentResourcesOfPlanet(originPlanet);
+    const newMetal = res.metal + (mission.metal_sent || 0);
+    const newCrystal = res.crystal + (mission.crystal_sent || 0);
+    const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
+    const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
+    const newFighter = originPlanet.fighter_count + (mission.fighter_ships_sent || 0);
+    const newTransport = (originPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
+    await restRequest(`planets?id=eq.${originPlanet.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metal: newMetal,
+        crystal: newCrystal,
+        mothership_count: newMothership,
+        scout_count: newScout,
+        fighter_count: newFighter,
+        transport_count: newTransport,
+        last_tick: new Date().toISOString(),
+      }),
+    });
+    if (planet && String(planet.id) === String(originPlanet.id)) {
+      localMetal = newMetal;
+      localCrystal = newCrystal;
+      planet.mothership_count = newMothership;
+      planet.scout_count = newScout;
+      planet.fighter_count = newFighter;
+      planet.transport_count = newTransport;
+      lastTickLocal = Date.now();
+      renderResources();
+      showToast(`殖民艦隊已召回返航,艦隊與物資已回到星球(座標 ${mission.target_coord} 未被殖民)`, 'success', 8000);
+    }
+  }
+
   async function resolveArrivedColonizations() {
     if (!planet) return;
     try {
@@ -6201,6 +6465,11 @@
       body: JSON.stringify({ resolved: true }),
     });
     if (!claimed || claimed.length === 0) return;
+
+    if (mission.recalled) {
+      await resolveRecalledColonization(mission);
+      return;
+    }
 
     const created = await restRequest('planets', {
       method: 'POST',
