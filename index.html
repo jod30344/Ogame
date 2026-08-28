@@ -590,6 +590,23 @@
   #colonize-modal .modal-confirm { background: var(--colonize); border-color: var(--colonize); color: #2a0e1a; }
   .colonize-form-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
   .colonize-intro { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px; }
+  /* 移防 (redeploy) card layout — per user feedback ("整體空白處好多") that reusing
+     colonize-form-grid's single-column stack here (fine inside the NARROW
+     colonize-modal it was designed for) looked wrong inside the WIDE, full-page
+     `.attack-card`: a tall single column of 7 stacked inputs on one side, with a
+     huge vertically-centered gap next to it on the other. Both new classes force
+     their row to take the card's FULL width (so they always start a fresh flex
+     line inside `.attack-card`'s own `flex-wrap`), then lay their own children out
+     with an actual CSS grid that wraps into as many columns as fit. */
+  .redeploy-target-row { display: flex; width: 100%; }
+  .redeploy-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+    width: 100%;
+    margin-bottom: 6px;
+  }
+  .redeploy-form-grid .ship-input { width: 100%; box-sizing: border-box; }
 
   /* Planet switcher */
   .planet-switcher { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
@@ -1022,11 +1039,13 @@
       <span class="section-note">在自己的殖民地之間調度艦隊與資源,派遣前會檢查目的地的艦隊上限</span>
     </div>
     <div class="attack-card" id="redeploy-card">
-      <div class="target-input target-placeholder" id="redeploy-target-placeholder">尚無其他殖民地</div>
-      <select class="target-input hidden" id="redeploy-target-planet">
-        <option value="">請選擇目的地</option>
-      </select>
-      <div class="colonize-form-grid">
+      <div class="redeploy-target-row">
+        <div class="target-input target-placeholder" id="redeploy-target-placeholder">尚無其他殖民地</div>
+        <select class="target-input hidden" id="redeploy-target-planet">
+          <option value="">請選擇目的地</option>
+        </select>
+      </div>
+      <div class="redeploy-form-grid">
         <div class="ship-input-group">
           <label class="ship-input-label" for="redeploy-mothership">殖民母艦</label>
           <input type="number" class="ship-input" id="redeploy-mothership" min="0" value="0">
