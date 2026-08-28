@@ -484,10 +484,16 @@
 
   .hidden { display: none !important; }
 
-  /* Sticky resource bar */
+  /* Sticky resource bar — stacks directly BELOW the 快速跳轉列 (section-nav)
+     rather than overlapping it: both are `position: sticky` siblings that
+     each want `top: 0` on their own, so without this they'd pin to the exact
+     same spot and fight over it. `--section-nav-height` is set live by
+     updateStickyOffsets() (nav's own rendered height changes if its pill row
+     ever wraps to a second line on a narrow screen), so this always sits
+     flush under the nav bar regardless. */
   .resources {
     position: sticky;
-    top: 0;
+    top: var(--section-nav-height, 0px);
     z-index: 5;
     padding-top: 10px;
     margin: -10px -4px 20px;
@@ -2907,18 +2913,42 @@
     });
   }
 
+  // BUG FIX (reported by the user via screenshot: jumping to any section
+  // except 建設 landed with its title hidden behind a pinned-to-top bar):
+  // `.resources` (the metal/crystal/food + fleet-total summary bar) was
+  // ALREADY `position: sticky; top: 0` before 快速跳轉列 existed — a
+  // pre-existing feature, not something this round introduced. Once scrolled
+  // past its own natural position, it stays permanently pinned at the top of
+  // the viewport too, stacked right below the nav (see the `.resources` CSS
+  // rule's own comment for the `--section-nav-height` stacking fix). The
+  // click-to-jump offset below only ever subtracted the nav bar's OWN height,
+  // not this second permanently-visible bar sitting right under it — so every
+  // jump undershot by exactly the resources bar's height, landing with the
+  // target section's title tucked behind it. 建設 (`plots-grid`, the very
+  // first section right after the resources bar) never showed the bug simply
+  // because jumping to it barely scrolls at all, so the resources bar hadn't
+  // become "stuck" yet at that scroll position. `stickyTopHeight()` now
+  // measures BOTH bars live (the resources bar's own height already varies —
+  // it grows once the fleet-total summary card unlocks — so it can't be a
+  // fixed constant either) and is the single source of truth both the click
+  // handler and the scrollspy's rootMargin below now share.
+  function stickyTopHeight() {
+    const nav = document.getElementById('section-nav');
+    const resources = document.getElementById('resources-bar');
+    return (nav ? nav.offsetHeight : 0) + (resources ? resources.offsetHeight : 0);
+  }
+
+  function updateStickyOffsets() {
+    document.documentElement.style.setProperty('--section-nav-height', document.getElementById('section-nav')?.offsetHeight + 'px' || '0px');
+  }
+  updateStickyOffsets();
+  window.addEventListener('resize', updateStickyOffsets);
+
   document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
     btn.addEventListener('click', () => {
       const target = document.getElementById(btn.dataset.navTarget);
       if (!target) return;
-      // Manual offset (rather than relying on `scroll-margin-top` on every
-      // target) so the sticky nav bar itself never ends up covering the
-      // section title it just scrolled to — measured live off the nav bar's
-      // own current height, so it stays correct even if the pill row wraps
-      // to a second line on a narrow screen.
-      const nav = document.getElementById('section-nav');
-      const navHeight = nav ? nav.offsetHeight : 0;
-      const y = target.getBoundingClientRect().top + window.scrollY - navHeight - 10;
+      const y = target.getBoundingClientRect().top + window.scrollY - stickyTopHeight() - 10;
       window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
     });
   });
@@ -2928,8 +2958,8 @@
   // aid for orientation — no functional dependency on this observer existing
   // (clicking a pill always works regardless of whether `.current` is
   // accurately tracking scroll position). rootMargin's negative top matches
-  // the sticky nav bar's own height so a section isn't considered "current"
-  // while it's still hidden behind the bar.
+  // BOTH permanently-pinned bars' combined height (see stickyTopHeight()) so
+  // a section isn't considered "current" while it's still hidden behind them.
   const sectionNavObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       const btn = document.querySelector(`.section-nav-item[data-nav-target="${entry.target.id}"]`);
@@ -2939,7 +2969,7 @@
         btn.classList.add('current');
       }
     });
-  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 });
+  }, { rootMargin: `-${stickyTopHeight() + 10}px 0px -70% 0px`, threshold: 0 });
   document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
     const target = document.getElementById(btn.dataset.navTarget);
     if (target) sectionNavObserver.observe(target);
