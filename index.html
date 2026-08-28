@@ -608,6 +608,48 @@
   }
   .redeploy-form-grid .ship-input { width: 100%; box-sizing: border-box; }
 
+  /* 快速跳轉列 (section quick-jump nav) — per explicit user request ("功能越開
+     越多,要上下滑來滑去") — sticks to the top of the viewport while scrolling so
+     the player can jump straight to any unlocked section instead of hunting for
+     it. Each pill's OWN visibility mirrors its target section's current
+     hidden/shown state (kept in sync by updateSectionNavVisibility(), called
+     from the tail of updateActionSectionVisibility() — the one function every
+     gate in this file already funnels through), so a player never sees a link
+     to a section they haven't unlocked yet. Horizontally scrollable (not
+     wrapped) so it stays a single compact row even with every section
+     unlocked, rather than growing tall and eating into the sticky space it's
+     meant to save. */
+  .section-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding: 10px 2px;
+    margin: 0 -2px 18px;
+    background: var(--bg-deep);
+    border-bottom: 1px solid var(--line);
+    scrollbar-width: thin;
+  }
+  .section-nav-item {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-panel);
+    color: var(--text-dim);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+  .section-nav-item:hover { border-color: var(--ok); color: var(--text-main); }
+  .section-nav-item.current { border-color: var(--ok); color: var(--text-main); background: #16281f; }
+
   /* Planet switcher */
   .planet-switcher { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
   .planet-tab {
@@ -894,6 +936,22 @@
     </div>
     <button class="signout" id="signout-btn">切換玩家</button>
   </header>
+
+  <!-- 快速跳轉列 — each pill starts hidden; updateSectionNavVisibility() (called
+       from the tail of updateActionSectionVisibility()) reveals only the ones
+       whose target section is actually unlocked right now. -->
+  <div class="section-nav" id="section-nav">
+    <button class="section-nav-item" data-nav-target="plots-grid" type="button">建設</button>
+    <button class="section-nav-item hidden" data-nav-target="fleet-roster-section" type="button">艦隊</button>
+    <button class="section-nav-item hidden" data-nav-target="ship-production-section" type="button">生產排程</button>
+    <button class="section-nav-item hidden" data-nav-target="explore-section" type="button">探索</button>
+    <button class="section-nav-item hidden" data-nav-target="known-planets-section" type="button">已知星球</button>
+    <button class="section-nav-item hidden" data-nav-target="attack-section" type="button">攻擊</button>
+    <button class="section-nav-item hidden" data-nav-target="transport-section" type="button">運輸</button>
+    <button class="section-nav-item hidden" data-nav-target="redeploy-section" type="button">移防</button>
+    <button class="section-nav-item hidden" data-nav-target="movement-log-section" type="button">艦隊動向</button>
+    <button class="section-nav-item hidden" data-nav-target="battle-log-section" type="button">戰報</button>
+  </div>
 
   <div class="planet-switcher hidden" id="planet-switcher"></div>
 
@@ -1587,6 +1645,12 @@
     document.getElementById('battle-log-section')?.classList.toggle('hidden', !intelSectionsVisible);
     document.getElementById('known-planets-section')?.classList.toggle('hidden', !intelSectionsVisible);
     document.getElementById('explore-section')?.classList.toggle('hidden', !exploreVisible);
+    // Keep the 快速跳轉列 pills in sync — see updateSectionNavVisibility()'s own
+    // comment for why funneling through here (rather than adding new call
+    // sites) is enough to cover every gate in this file, including the
+    // fleet-roster-section/ship-production-section ones set by
+    // updateFleetSectionVisibility() just before it calls this function.
+    updateSectionNavVisibility();
   }
 
   // Combined fighter+transport total across every state (home/away/exploring/
@@ -2820,6 +2884,66 @@
       others.map(p => `<option value="${p.id}">座標 ${p.coord}</option>`).join('');
     if (others.some(p => String(p.id) === prevValue)) select.value = prevValue;
   }
+
+  // ============================================================
+  // 快速跳轉列 (section quick-jump nav) — per explicit user request ("功能越開
+  // 越多,要上下滑來滑去"). Each `.section-nav-item` pill's `data-nav-target`
+  // names the id of the section it jumps to; `updateSectionNavVisibility()`
+  // mirrors that target section's own hidden/shown state onto the pill, so a
+  // player only ever sees jump links for sections they've actually unlocked.
+  // Called from the tail of updateActionSectionVisibility() — the one
+  // function every visibility gate in this file already funnels through (see
+  // updateFleetSectionVisibility()'s own call to it), so this stays correct
+  // for free with no new call sites needed anywhere else.
+  // ============================================================
+  function updateSectionNavVisibility() {
+    document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
+      const target = document.getElementById(btn.dataset.navTarget);
+      // `plots-grid` has no hidden-toggling gate of its own (always visible
+      // once logged in) — treat a target with no visibility gate as always
+      // unlocked, same as the section itself.
+      const targetHidden = target ? target.classList.contains('hidden') : true;
+      btn.classList.toggle('hidden', targetHidden);
+    });
+  }
+
+  document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.navTarget);
+      if (!target) return;
+      // Manual offset (rather than relying on `scroll-margin-top` on every
+      // target) so the sticky nav bar itself never ends up covering the
+      // section title it just scrolled to — measured live off the nav bar's
+      // own current height, so it stays correct even if the pill row wraps
+      // to a second line on a narrow screen.
+      const nav = document.getElementById('section-nav');
+      const navHeight = nav ? nav.offsetHeight : 0;
+      const y = target.getBoundingClientRect().top + window.scrollY - navHeight - 10;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    });
+  });
+
+  // Lightweight "scrollspy": highlights whichever section is currently
+  // scrolled into view by giving its pill a `.current` style, purely a visual
+  // aid for orientation — no functional dependency on this observer existing
+  // (clicking a pill always works regardless of whether `.current` is
+  // accurately tracking scroll position). rootMargin's negative top matches
+  // the sticky nav bar's own height so a section isn't considered "current"
+  // while it's still hidden behind the bar.
+  const sectionNavObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const btn = document.querySelector(`.section-nav-item[data-nav-target="${entry.target.id}"]`);
+      if (!btn) return;
+      if (entry.isIntersecting) {
+        document.querySelectorAll('.section-nav-item.current').forEach(el => el.classList.remove('current'));
+        btn.classList.add('current');
+      }
+    });
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 });
+  document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
+    const target = document.getElementById(btn.dataset.navTarget);
+    if (target) sectionNavObserver.observe(target);
+  });
 
   async function pollUpdates() {
     await loadBuildings();               // needed first: rates depend on it
