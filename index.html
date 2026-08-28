@@ -1962,6 +1962,39 @@
   // while this is `false`, rather than trusting an undercount.
   let fleetCapDataReady = false;
 
+  // BUG FIX: a FIFTH way to blow past the fleet cap, a genuinely different
+  // class of race from the four fleetCapDataReady closes above — this one is
+  // about two CONCURRENT executions of the same check-then-insert code,
+  // rather than stale/empty data on a single execution. `pollUpdates()` is
+  // driven by a plain `setInterval(pollUpdates, 8000)` with no re-entrancy
+  // guard; a single cycle runs ~20 sequential awaited network round-trips
+  // (see its own body), so under real latency a cycle can easily take longer
+  // than 8s, letting `setInterval` fire the NEXT `pollUpdates()` call while
+  // the previous one is still mid-flight. `autoQueueBatch()`'s cap check
+  // (read `currentFleetTotal()`, compare to cap) and its actual DB insert are
+  // separated by two more awaited round-trips (`saveToServer()`, then the
+  // `ship_queue` POST) — if a SECOND overlapping cycle's own
+  // `maybeAutoQueueProduction()` reaches the SAME ship type's check during
+  // that window, it reads the same still-pre-insert `currentFleetTotal()`
+  // and ALSO passes, queueing a second full-size batch. Unlike every other
+  // resolver in this file (which use a `?id=eq.X&resolved=eq.false`-style
+  // claim-guard PATCH on an EXISTING row), there's nothing to compare-and-
+  // swap against here — this is a fresh INSERT, so nothing stopped the
+  // second call. Reported by the user via a screenshot showing 總數 692/600
+  // with TWO simultaneous fresh 100-scout production slots both reading
+  // "第 1/100 艘" — reproduced directly by firing two overlapping
+  // `maybeAutoQueueProduction()` calls with an artificial network delay
+  // (mirroring what a slow/overlapping poll cycle looks like): both passed
+  // the cap check and both inserted, 450/600 -> 650/600 from a single
+  // (unawaited-between) double-call. Also reachable via `toggleAutoProduce()`
+  // turning a line on, which calls `maybeAutoQueueProduction()` directly,
+  // outside `pollUpdates()` entirely, racing against an in-flight poll cycle.
+  // Fixed with a re-entrancy guard scoped to `maybeAutoQueueProduction()`
+  // itself (not the whole of `pollUpdates()`) so it protects BOTH call sites
+  // uniformly without skipping every other unrelated poll-cycle operation
+  // whenever two cycles happen to overlap.
+  let autoProduceQueueInProgress = false;
+
   let localMetal = 0;
   let localCrystal = 0;
   let localFood = 0;
@@ -3990,11 +4023,24 @@
   // outstanding, and this notices the gap and refills it.
   async function maybeAutoQueueProduction() {
     if (!planet || !hasAutomationInstitute()) return;
-    for (const type of Object.keys(SHIP_TYPES)) {
-      if (!isAutoProducing(type)) continue;
-      const hasPending = shipQueueRows.some(r => r.ship_type === type && (r.status === 'queued' || r.status === 'building'));
-      if (hasPending) continue;
-      await autoQueueBatch(type);
+    // Re-entrancy guard — see `autoProduceQueueInProgress`'s own declaration
+    // comment for the concurrent-overlapping-poll-cycle race this closes. A
+    // second call arriving while the first is still mid-flight (awaiting
+    // autoQueueBatch()'s network round-trips) just backs off immediately
+    // rather than racing its own cap check against the first call's
+    // not-yet-visible insert — the NEXT poll cycle (or the first call, still
+    // in progress) will pick up any genuinely-still-needed batch regardless.
+    if (autoProduceQueueInProgress) return;
+    autoProduceQueueInProgress = true;
+    try {
+      for (const type of Object.keys(SHIP_TYPES)) {
+        if (!isAutoProducing(type)) continue;
+        const hasPending = shipQueueRows.some(r => r.ship_type === type && (r.status === 'queued' || r.status === 'building'));
+        if (hasPending) continue;
+        await autoQueueBatch(type);
+      }
+    } finally {
+      autoProduceQueueInProgress = false;
     }
   }
 
