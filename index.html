@@ -5388,6 +5388,21 @@
     const msg = document.getElementById('explore-msg');
     msg.className = 'attack-msg';
 
+    // BUG FIX (same vulnerability class as buildShips()'s own fleetCapDataReady
+    // guard — see its declaration comment): switchToPlanet() resets
+    // `explorationRows` to `[]` synchronously, then only repopulates it
+    // asynchronously via pollUpdates() -> loadExplorationData(). In the brief
+    // window between switching to a planet and that load completing, the slot-
+    // cap check just below would read `explorationRows.length` as 0 regardless
+    // of how many missions are ACTUALLY still in flight on this planet — letting
+    // a player who clicks 派遣探索 fast enough right after switching planets
+    // launch past their real concurrent-mission cap. Previously unaudited (see
+    // project notes); closed the same way ship production already is, by
+    // reusing the existing `fleetCapDataReady` flag (it's already set false on
+    // every switch and only flips true once explorationRows/colonizationRows/
+    // cachedMissions/shipQueueRows have all loaded fresh for this planet).
+    if (!fleetCapDataReady) { msg.textContent = '資料同步中,請稍候片刻再試'; return; }
+
     const explorationCap = explorationCapForHomesteadLevel(homesteadLevel());
     if (explorationRows.length >= explorationCap) { msg.textContent = `最多同時派遣 ${explorationCap} 支艦隊(含探索與偵查),請等其中一支返航`; return; }
     // 偵察機是探索的硬性門檻——沒有偵察機隨行,艦隊連出發都不行。
@@ -6115,6 +6130,11 @@
 
   async function launchRecon(coord, scoutCount, btn) {
     if (!planet) return;
+    // Same fleetCapDataReady guard as onExploreClick() just above — this
+    // function's own concurrent-mission-slot check right below reads the same
+    // `explorationRows` array, so it's exposed to the exact same post-switch
+    // race window. See that comment for the full explanation.
+    if (!fleetCapDataReady) { showToast('資料同步中,請稍候片刻再試', 'danger'); return; }
     if (scoutCount > (planet.scout_count || 0)) {
       showToast(`你只有 ${planet.scout_count || 0} 艘偵察機`, 'danger');
       return;
@@ -6250,6 +6270,22 @@
     const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-crystal').value) || 0));
     const msg = document.getElementById('colonize-modal-msg');
     msg.className = 'attack-msg';
+
+    // BUG FIX (same vulnerability class as onExploreClick()/launchRecon()
+    // just above, and buildShips()'s original fleetCapDataReady guard): the
+    // double-launch guard for this exact coordinate lives entirely in
+    // renderExplorationLog()/renderKnownPlanets() — the 殖民 button simply
+    // doesn't render if `colonizationRows` already has an unresolved mission
+    // to this coord. But `colonizationRows` gets reset to `[]` synchronously
+    // on every switchToPlanet() and only repopulates once loadColonizationMissions()
+    // completes, so a player who reaches this modal and confirms fast enough
+    // right after switching planets could launch a SECOND colonization
+    // mission to a coordinate that already has one in flight, since the
+    // button's render-time check saw a stale empty array. Blocking here until
+    // fleetCapDataReady is true guarantees colonizationRows has been loaded at
+    // least once for this planet before any colonize launch can actually go
+    // through, closing that window.
+    if (!fleetCapDataReady) { msg.textContent = '資料同步中,請稍候片刻再試'; return; }
 
     if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
     if (mothership < 1) { msg.textContent = '殖民必須指派至少 1 艘殖民母艦'; return; }
