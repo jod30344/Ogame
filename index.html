@@ -821,6 +821,10 @@
           <label class="ship-input-label" for="colonize-crystal">攜帶晶體</label>
           <input type="number" class="ship-input" id="colonize-crystal" min="0" value="0">
         </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="colonize-food">攜帶糧食</label>
+          <input type="number" class="ship-input" id="colonize-food" min="0" value="0">
+        </div>
       </div>
       <div class="attack-msg" id="colonize-modal-msg"></div>
     </div>
@@ -6268,9 +6272,9 @@
     pendingColonizeContext = { coord, explorationId: explorationId || null };
     const travelSec = colonizationTravelSeconds(planet.coord, coord);
     document.getElementById('colonize-modal-intro').textContent =
-      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後將化為拓荒者營地,不會返航);下方也可選擇額外攜帶的艦隊與物資 —— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。`;
+      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後將化為拓荒者營地,不會返航);下方也可選擇額外攜帶的艦隊與物資(含糧食)—— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。注意:糧食完全由你攜帶的量決定,不像金屬/晶體以外還有內建緩衝——沒帶糧食,新殖民地起始糧食就是 0。`;
     document.getElementById('colonize-mothership').value = 1;
-    ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal'].forEach(id => {
+    ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal', 'colonize-food'].forEach(id => {
       document.getElementById(id).value = 0;
     });
     const msg = document.getElementById('colonize-modal-msg');
@@ -6296,6 +6300,7 @@
     const transport = parseInt(document.getElementById('colonize-transport').value, 10) || 0;
     const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-metal').value) || 0));
     const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-crystal').value) || 0));
+    const food = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-food').value) || 0));
     const msg = document.getElementById('colonize-modal-msg');
     msg.className = 'attack-msg';
 
@@ -6325,12 +6330,22 @@
     if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
 
     const { coord, explorationId } = pendingColonizeContext;
+    // Two separate food draws on the ORIGIN planet: `colonizeFoodCost` is the
+    // travel upkeep for the committed fleet (consumed en route, same as every
+    // other mission type — see missionFoodCost()); `food` is the amount the
+    // player has chosen to hand over to become the new colony's starting
+    // stock (transferred, not consumed). Both come out of the same localFood
+    // balance at launch, so the check must cover their sum.
     const colonizeFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, colonizationTravelSeconds(planet.coord, coord));
-    if (colonizeFoodCost > localFood) { msg.textContent = `糧食不足,此次殖民需要 ${colonizeFoodCost} 糧食(現有 ${Math.floor(localFood)})`; return; }
+    const totalFoodNeeded = colonizeFoodCost + food;
+    if (totalFoodNeeded > localFood) {
+      msg.textContent = `糧食不足,此次殖民需要 ${colonizeFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(localFood)})`;
+      return;
+    }
     const okBtn = document.getElementById('colonize-modal-ok');
     okBtn.disabled = true;
     try {
-      await launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal });
+      await launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal, food });
       closeColonizeModal();
     } catch (err) {
       console.error('Launch colonization error:', err);
@@ -6340,7 +6355,7 @@
     }
   });
 
-  async function launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal }) {
+  async function launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal, food }) {
     const travelSec = colonizationTravelSeconds(planet.coord, coord);
     const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
 
@@ -6370,10 +6385,16 @@
     planet.transport_count = (planet.transport_count || 0) - transport;
     localMetal -= metal;
     localCrystal -= crystal;
+    // Two separate food draws — see the colonize-modal-ok handler's comment
+    // for why these are kept distinct: the travel upkeep is consumed en
+    // route (same as every other mission type), while `food` is a transfer
+    // that becomes the new colony's starting stock (see resolveOneColonization()).
     localFood -= missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+    localFood -= food;
     renderResources();
     if (metal > 0) flashResource('metal-value', 'danger');
     if (crystal > 0) flashResource('crystal-value', 'danger');
+    if (food > 0) flashResource('food-value', 'danger');
     await saveToServer();
 
     await restRequest('colonization_missions', {
@@ -6388,6 +6409,7 @@
         transport_ships_sent: transport,
         metal_sent: metal,
         crystal_sent: crystal,
+        food_sent: food,
         launched_at: new Date().toISOString(),
         arrival_time: arrivalTime,
         resolved: false,
@@ -6550,6 +6572,15 @@
     const res = await currentResourcesOfPlanet(originPlanet);
     const newMetal = res.metal + (mission.metal_sent || 0);
     const newCrystal = res.crystal + (mission.crystal_sent || 0);
+    // The 攜帶糧食 committed to the new colony (food_sent) never left with
+    // the fleet's own travel-upkeep pre-payment — that's a separate deduction
+    // (see launchColonization()'s applyRecall()-independent
+    // missionFoodCost() draw) already refunded proportionally by
+    // applyRecall() itself when the recall was first requested. This
+    // food_sent amount was earmarked as the NEW colony's starting stock,
+    // which never came to be since the mission never arrived — so it comes
+    // back to the origin in full here, same as metal_sent/crystal_sent.
+    const newFood = res.food + (mission.food_sent || 0);
     const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
     const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
     const newFighter = originPlanet.fighter_count + (mission.fighter_ships_sent || 0);
@@ -6559,6 +6590,7 @@
       body: JSON.stringify({
         metal: newMetal,
         crystal: newCrystal,
+        food: newFood,
         mothership_count: newMothership,
         scout_count: newScout,
         fighter_count: newFighter,
@@ -6569,6 +6601,7 @@
     if (planet && String(planet.id) === String(originPlanet.id)) {
       localMetal = newMetal;
       localCrystal = newCrystal;
+      localFood = newFood;
       planet.mothership_count = newMothership;
       planet.scout_count = newScout;
       planet.fighter_count = newFighter;
@@ -6626,13 +6659,23 @@
         scout_count: mission.scout_ships_sent || 0,
         fighter_count: mission.fighter_ships_sent || 0,
         transport_count: mission.transport_ships_sent || 0,
-        // New colonies start with a fixed food seed (same STARTING_FOOD as a
-        // brand-new player planet) rather than exposing yet another
-        // colonize-modal input — kept in scope-contained territory since the
-        // mothership/scout/fighter/transport/metal/crystal the player already
-        // commits are the meaningful "what do I bring" decision; food is a
-        // small buffer so the new colony isn't instantly starving on arrival.
-        food: STARTING_FOOD,
+        // FEATURE: new colonies used to always start with a fixed
+        // STARTING_FOOD seed regardless of the committed fleet size — the
+        // user pointed out that a large committed fleet (which becomes the
+        // new colony's HOME fleet the instant it lands, and so immediately
+        // starts eating food upkeep — see resolveFoodUpkeep()) could easily
+        // outpace that fixed 100-point buffer, risking an immediate
+        // starvation event right after founding. `攜帶糧食` is now a real
+        // colonize-modal input, same row as 攜帶金屬/攜帶晶體, and per
+        // explicit user choice ("完全由你携帶的量決定,與金屬/晶體一致") the
+        // new colony's starting food is driven ENTIRELY by what was
+        // committed — bringing 0 means the new colony starts with 0 food,
+        // exactly like bringing 0 metal/crystal means starting with 0 of
+        // those, no residual STARTING_FOOD safety net. STARTING_FOOD is
+        // still used unchanged for a brand-new PLAYER's very first planet
+        // (see the `players` table insert) — this only changes newly-founded
+        // colonies via colonization.
+        food: mission.food_sent || 0,
         // Explicit, not relied on as a DB default: every other place in this
         // file that sets metal/crystal to an absolute value also stamps
         // last_tick alongside it (see saveToServer() and the mission-loot
