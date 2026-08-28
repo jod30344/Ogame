@@ -655,6 +655,25 @@
   }
   .section-nav-item:hover { border-color: var(--ok); color: var(--text-main); }
   .section-nav-item.current { border-color: var(--ok); color: var(--text-main); background: #16281f; }
+  /* 回到頂端 (back-to-top) — per explicit user request, sits to the LEFT of
+     建設 so it's always the first, fixed thing in the row (never pushed
+     around as other pills show/hide) — lets a player deep in a long page
+     jump straight back up to the header's 切換玩家 button without manually
+     scrolling. Icon-only and circular, deliberately NOT styled like the
+     labeled section pills next to it, so it doesn't read as "just another
+     section" — it jumps to the very TOP of the page, not to any one section,
+     and is never gated/hidden the way the others are (always useful, exactly
+     like the 建設 pill it sits beside). */
+  .section-nav-item.section-nav-top {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+  }
+  .section-nav-item.section-nav-top svg { width: 16px; height: 16px; }
 
   /* Planet switcher */
   .planet-switcher { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
@@ -947,6 +966,9 @@
        from the tail of updateActionSectionVisibility()) reveals only the ones
        whose target section is actually unlocked right now. -->
   <div class="section-nav" id="section-nav">
+    <button class="section-nav-item section-nav-top" id="section-nav-top-btn" type="button" title="回到頂端(切換玩家)" aria-label="回到頂端">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+    </button>
     <button class="section-nav-item" data-nav-target="plots-grid" type="button">建設</button>
     <button class="section-nav-item hidden" data-nav-target="fleet-roster-section" type="button">艦隊</button>
     <button class="section-nav-item hidden" data-nav-target="ship-production-section" type="button">生產排程</button>
@@ -2912,6 +2934,13 @@
       btn.classList.toggle('hidden', targetHidden);
     });
   }
+
+  // 回到頂端 — plain `window.scrollTo(0)`, no `stickyTopHeight()` offset needed
+  // (unlike the section jump-links below): the very top of the page is above
+  // BOTH sticky bars, not behind them, so there's nothing to subtract for.
+  document.getElementById('section-nav-top-btn')?.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 
   // BUG FIX (reported by the user via screenshot: jumping to any section
   // except 建設 landed with its title hidden behind a pinned-to-top bar):
