@@ -5557,6 +5557,34 @@
         });
       } else {
         foundType = 'empty';
+        // BUG FIX: an empty (colonizable) discovery used to skip known_planets
+        // entirely — only 'player'/'npc' discoveries got upserted above. But
+        // renderKnownPlanets() already fully supports target_type === 'empty'
+        // (its own 殖民 button, in-flight status, mothership gate — see that
+        // function), and resolveOneColonization() already unconditionally
+        // tries to DELETE a matching known_planets row on arrival regardless
+        // of type (a harmless no-op if none exists) — so 已知星球 was always
+        // DESIGNED to carry empty-coordinate entries too, this just never
+        // wrote one. The missing row meant a player whose only discoveries
+        // were empty coordinates they colonized straight from the log (never
+        // triggering the 'player'/'npc' branch above) ended up with a
+        // permanently-empty known_planets list, which hid 艦隊動向/戰報 too
+        // (see hasAnyKnownPlanet() and the "all five" section gate) — so a
+        // colonization mission launched that way had no reachable 召回 button
+        // even while genuinely in flight. Fixed by upserting here exactly like
+        // the 'player'/'npc' branch does, just with target_type: 'empty' and
+        // no target_player_name.
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: foundCoord,
+            target_type: foundType,
+            target_player_name: null,
+            discovered_at: new Date().toISOString(),
+          }),
+        });
       }
     }
 
