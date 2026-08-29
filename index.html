@@ -1477,15 +1477,29 @@
   function hasShipyard() {
     return ownBuildings.some(b => b.building_type === 'shipyard');
   }
-  const FLEET_GATED_SECTION_IDS = [
-    'fleet-top-card', 'fleet-roster-section', 'ship-production-section',
+  // BUG FIX: a newly colonized planet has no shipyard yet (only the
+  // auto-seeded homestead), but resolveOneColonization() already writes a
+  // real, nonzero starting fleet onto it from whatever ships the colonist
+  // wave brought along. Gating ALL fleet UI (including the top-bar count
+  // display) purely on hasShipyard() made that fleet completely invisible —
+  // the player could see nothing of the ships they clearly just spent to get
+  // there. fleet-top-card is therefore also shown whenever the planet
+  // already owns any ships at all (currentFleetTotal() > 0), independent of
+  // the shipyard gate. fleet-roster-section/ship-production-section are
+  // genuine production UI (build buttons, queue) that legitimately still
+  // require a shipyard, so those two keep the original hasShipyard()-only
+  // rule.
+  const FLEET_PRODUCTION_GATED_SECTION_IDS = [
+    'fleet-roster-section', 'ship-production-section',
   ];
   function updateFleetSectionVisibility() {
     const unlocked = hasShipyard();
-    FLEET_GATED_SECTION_IDS.forEach(id => {
+    FLEET_PRODUCTION_GATED_SECTION_IDS.forEach(id => {
       const el = document.getElementById(id);
       if (el) el.classList.toggle('hidden', !unlocked);
     });
+    const topCardEl = document.getElementById('fleet-top-card');
+    if (topCardEl) topCardEl.classList.toggle('hidden', !(unlocked || currentFleetTotal() > 0));
     updateActionSectionVisibility();
   }
 
@@ -1635,7 +1649,7 @@
   // updateIntelSectionVisibility(), and loadKnownPlanets()).
   //
   // explore-section is handled separately in this same function (not in the
-  // FLEET_GATED_SECTION_IDS loop above) because its own requirement is a
+  // FLEET_PRODUCTION_GATED_SECTION_IDS loop above) because its own requirement is a
   // compound one — hasShipyard() AND hasIntelCenter() must BOTH be true, since
   // exploring needs an actual fleet to send (from the shipyard) and an actual
   // record of what it found (from the intel center). It deliberately does NOT
@@ -2369,18 +2383,54 @@
   // Ship types can now carry a `minHomesteadLevel` gate (currently just
   // mothership, LV4) — this filters Object.keys(SHIP_TYPES) down to the
   // subset the player has actually unlocked, so a not-yet-available type's
-  // top-bar chip / roster card simply doesn't render (progressive
-  // disclosure, same pattern used everywhere else in this file) instead of
-  // showing a disabled/locked placeholder.
+  // roster build-card simply doesn't render (progressive disclosure, same
+  // pattern used everywhere else in this file) instead of showing a
+  // disabled/locked placeholder. NOTE: the fleet-TOP-BAR chip row uses
+  // fleetTopBarVisibleTypes() below instead of this directly — see that
+  // function's comment for why the two need to differ.
   function visibleShipTypes() {
     const level = homesteadLevel();
     return Object.keys(SHIP_TYPES).filter(type => level >= (SHIP_TYPES[type].minHomesteadLevel || 1));
+  }
+  // Combined count of one ship type across every state this planet's fleet
+  // can be in — home/away/exploring/building/colonizing(outbound)/
+  // redeploying(outbound) — i.e. "does this planet's account currently own
+  // any of these, regardless of homestead-level unlock." Same breakdown
+  // currentFleetTotal() sums across ALL types; this is the per-type version,
+  // needed so fleetTopBarVisibleTypes() below can tell "owned" apart from
+  // "unlocked."
+  function shipTypeOwnedCount(type) {
+    if (!planet) return 0;
+    const home = planet[`${type}_count`] || 0;
+    return home + fleetAwayCount(type) + fleetExploringCount(type) + fleetBuildingCount(type)
+      + fleetColonizingCount(type) + fleetRedeployingCount(type);
+  }
+  // BUG FIX: a newly colonized planet can already own ships of a type the
+  // planet's own homestead level hasn't unlocked yet — most notably the
+  // 殖民母艦 (mothership) that PHYSICALLY CARRIED the colonists there, since
+  // colonizing always requires bringing at least one, but a fresh colony's
+  // homestead starts at LV1, well below HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL.
+  // `visibleShipTypes()` alone would silently drop that mothership's chip
+  // from the top bar even though the planet genuinely owns it — a ship you
+  // already have should never become invisible just because you haven't
+  // unlocked BUILDING more of that type yet. So the top bar shows a type if
+  // it's either unlocked OR already owned in any state; the roster/build
+  // card (visibleShipTypes(), above) intentionally keeps the stricter
+  // unlock-only rule, since offering a build button for a type you can't
+  // yet produce would be its own kind of confusing.
+  function fleetTopBarVisibleTypes() {
+    if (!planet) return [];
+    const level = homesteadLevel();
+    return Object.keys(SHIP_TYPES).filter(type => {
+      const unlocked = level >= (SHIP_TYPES[type].minHomesteadLevel || 1);
+      return unlocked || shipTypeOwnedCount(type) > 0;
+    });
   }
   function renderFleetTopBar() {
     if (!planet) return;
     const gridEl = document.getElementById('fleet-top-grid');
     if (!gridEl) return;
-    gridEl.innerHTML = visibleShipTypes().map(type => {
+    gridEl.innerHTML = fleetTopBarVisibleTypes().map(type => {
       const def = SHIP_TYPES[type];
       const home = planet[`${type}_count`] || 0;
       return fleetTypeBlockHtml(SHIP_ICONS[type] || '', def.name, home, fleetAwayCount(type), fleetExploringCount(type), fleetBuildingCount(type), fleetColonizingCount(type));
