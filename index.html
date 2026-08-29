@@ -1369,6 +1369,22 @@
   function fleetCapForHomesteadLevel(level) {
     return FLEET_CAP_BASE + (level - 1) * FLEET_CAP_PER_LEVEL;
   }
+  // FEATURE: 可殖民星球數量上限 — per explicit user request ("我想卡控玩家可殖民的
+  // 數量,LV1則一顆,LV2則兩顆依此類推"). Confirmed via AskUserQuestion this is one
+  // ACCOUNT-WIDE total-planet-count cap (home planet + every colony, including
+  // ones still in flight — not a per-planet "how many times can THIS planet
+  // colonize" limit), and that the level which sets it is the HIGHEST 拓荒者
+  // 營地 level across EVERY planet the player owns (see
+  // maxHomesteadLevelAccountWide() below) — not just the account's original
+  // home planet, so a well-developed colony can also unlock more slots for
+  // the whole account. LV1=1 total planet (i.e. colonizing at all requires
+  // reaching LV2 somewhere), LV2=2, LV3=3, LV4=4 — same flat base+per-level
+  // shape as every other homestead-scaled cap in this file.
+  const COLONY_CAP_BASE = 1;       // total planets (incl. home) allowed at homestead LV1
+  const COLONY_CAP_PER_LEVEL = 1;  // +1 total planet per homestead level above 1
+  function colonyCapForHomesteadLevel(level) {
+    return COLONY_CAP_BASE + (level - 1) * COLONY_CAP_PER_LEVEL;
+  }
   // Normal (non-homestead) buildable plots scale with homestead level too, so
   // the whole board grows in step with the colony's civilization tier instead
   // of handing out more room than a new player has "earned" yet.
@@ -1554,6 +1570,69 @@
   }
   function hasIntelCenterAnywhere() {
     return hasIntelCenterAnywhereFlag || hasIntelCenter();
+  }
+  // Same "refresh once per poll cycle via a cross-planet query" pattern as
+  // hasIntelCenterAnywhereFlag just above, but tracking a MAX value instead
+  // of a boolean — the highest 拓荒者營地 level across every planet the
+  // player owns, which is what colonyCapForHomesteadLevel() (see its own
+  // comment above) is keyed on. The `Math.max(..., homesteadLevel())`
+  // fallback in maxHomesteadLevelAccountWide() below covers the brief window
+  // before the first refresh completes, so the currently-viewed planet's own
+  // level is never treated as LOWER than reality while the account-wide
+  // check is still in flight.
+  let maxHomesteadLevelAccountWideFlag = 1;
+  async function loadAccountMaxHomesteadLevel() {
+    if (!planet || myPlanets.length === 0) { maxHomesteadLevelAccountWideFlag = 1; return; }
+    try {
+      const ids = myPlanets.map(p => p.id).join(',');
+      const rows = await restRequest(`buildings?planet_id=in.(${ids})&building_type=eq.homestead&select=level`);
+      const levels = (rows || []).map(r => r.level || 1);
+      maxHomesteadLevelAccountWideFlag = levels.length > 0 ? Math.max(...levels) : 1;
+    } catch (err) {
+      console.error('Load account max homestead level error:', err);
+    }
+  }
+  function maxHomesteadLevelAccountWide() {
+    return Math.max(maxHomesteadLevelAccountWideFlag, homesteadLevel());
+  }
+  // Same pattern again, this time tracking how many colonization missions
+  // are CURRENTLY IN FLIGHT (unresolved) across every one of the player's
+  // planets — not just `colonizationRows`, which only ever holds the
+  // CURRENTLY VIEWED planet's own outbound missions. A mission launched from
+  // planet A must still count against the account-wide colony cap while
+  // viewing planet B, or the cap could be overshot by launching one more
+  // colonization from each of several planets in the same poll window.
+  let accountColonizationInFlightCountFlag = 0;
+  async function loadAccountColonizationStatus() {
+    if (!planet || !planet.player_name) { accountColonizationInFlightCountFlag = 0; return; }
+    try {
+      const rows = await restRequest(`colonization_missions?player_name=eq.${encodeURIComponent(planet.player_name)}&resolved=eq.false&select=id`);
+      accountColonizationInFlightCountFlag = (rows || []).length;
+    } catch (err) {
+      console.error('Load account colonization status error:', err);
+    }
+  }
+  // Total planets that either already exist or will exist once every
+  // in-flight colonization mission lands — this, compared against
+  // colonyCapForHomesteadLevel(maxHomesteadLevelAccountWide()), is what
+  // gates whether a NEW colonize launch is offered. `Math.max(...,
+  // colonizationRows.length)` is the same "never undercount while the
+  // account-wide flag hasn't refreshed yet" caution as the fallback above —
+  // the current planet's own pending missions are always at least this many.
+  function colonizedOrPendingPlanetCount() {
+    return myPlanets.length + Math.max(accountColonizationInFlightCountFlag, colonizationRows.length);
+  }
+  function hasReachedColonyCap() {
+    return colonizedOrPendingPlanetCount() >= colonyCapForHomesteadLevel(maxHomesteadLevelAccountWide());
+  }
+  // Shared "locked" message for both colonize entry points (exploration log's
+  // rare-find branch, and known-planets' recon-discovered empty-coordinate
+  // branch) — same withheld-button-plus-explanation UX the pre-existing
+  // mothership-count gate already uses right next to this.
+  function colonyCapLockedMessageHtml() {
+    const total = colonizedOrPendingPlanetCount();
+    const cap = colonyCapForHomesteadLevel(maxHomesteadLevelAccountWide());
+    return `<div class="log-loot colonize-locked">已達殖民地數量上限(${total} / ${cap} 顆,含在途中的殖民艦隊)——把任一顆星球的拓荒者營地升級可以擴增上限</div>`;
   }
   // 自動化研究院 (Automation Institute) — homestead LV4 unlock, unique per
   // planet like the intel center (see the picker filter in renderPlots()).
@@ -3361,6 +3440,11 @@
       // visibility functions below read it (via hasIntelCenterAnywhere() in
       // updateActionSectionVisibility(), called from updateIntelSectionVisibility()).
       await loadAccountIntelStatus();
+      // Refresh the account-wide colony-cap inputs (highest homestead level
+      // across every planet, and how many colonizations are in flight
+      // account-wide) so renderExplorationLog()/renderKnownPlanets() show an
+      // up-to-date 殖民 button/lock state next time either re-renders.
+      await Promise.all([loadAccountMaxHomesteadLevel(), loadAccountColonizationStatus()]);
       updateFleetSectionVisibility();
       updateIntelSectionVisibility();
       renderResources();
@@ -6419,11 +6503,16 @@
       } else if (isRare) {
         // found_type === 'empty', or absent on a pre-existing row from before
         // this feature — both keep the original direct-colonize flow, gated
-        // on having at least one 殖民母艦 at home. Without one, the planet
-        // stays right here in the log (nothing is lost) with an explanatory
+        // on having at least one 殖民母艦 at home, AND (per explicit user
+        // request, checked first since it's the more fundamental block) on
+        // not already being at the account-wide colony cap — see
+        // hasReachedColonyCap()'s own comment. Either way the planet stays
+        // right here in the log (nothing is lost) with an explanatory
         // message instead of a button — the button reappears automatically
-        // once a mothership finishes building, no extra state to track.
-        if ((planet.mothership_count || 0) < 1) {
+        // once the blocking condition clears, no extra state to track.
+        if (hasReachedColonyCap()) {
+          extra = colonyCapLockedMessageHtml();
+        } else if ((planet.mothership_count || 0) < 1) {
           extra = `<div class="log-loot colonize-locked">需要至少 1 艘殖民母艦(LV${HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL} 造船廠解鎖)才能殖民這顆星球(座標 ${m.found_coord}),星球資訊已保留</div>`;
         } else {
           extra = `<button class="colonize-btn" data-colonize="${m.id}" data-coord="${m.found_coord}" type="button">殖民這顆星球(座標 ${m.found_coord})</button>`;
@@ -6584,6 +6673,10 @@
         const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
         const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
         colonizeBtn = `<div class="log-loot">殖民艦隊已出發,${etaText}</div>`;
+      } else if (kp.target_type === 'empty' && hasReachedColonyCap()) {
+        // Same account-wide colony-cap gate as the exploration log, checked
+        // first for the same reason — see that branch's own comment.
+        colonizeBtn = colonyCapLockedMessageHtml();
       } else if (kp.target_type === 'empty' && (planet.mothership_count || 0) < 1) {
         // Same mothership gate as the exploration log — the known-planet
         // entry itself stays listed either way, only the button is withheld.
@@ -6796,6 +6889,30 @@
     document.getElementById('colonize-modal').classList.add('hidden');
   }
 
+  // Used only when actually CONFIRMING a colonize launch — a fresh,
+  // authoritative account-wide colony-cap check, mirroring the same
+  // "cached flag for rendering, live fetch for the actual gate" split
+  // fetchDestinationFleetStatus() uses for 移防's destination fleet cap.
+  // The cached accountColonizationInFlightCountFlag/
+  // maxHomesteadLevelAccountWideFlag (used to decide whether the 殖民
+  // button even renders) only refresh once per poll cycle, so a player who
+  // launches two colonizations from two different planets within the same
+  // poll window could otherwise slip past the cap before either flag catches
+  // up. This re-derives both the cap and the current+pending planet count
+  // straight from the server at the moment of confirming.
+  async function fetchAccountColonyStatus() {
+    const ids = myPlanets.map(p => p.id).join(',');
+    const [homesteadRows, colonizationCountRows] = await Promise.all([
+      restRequest(`buildings?planet_id=in.(${ids})&building_type=eq.homestead&select=level`),
+      restRequest(`colonization_missions?player_name=eq.${encodeURIComponent(planet.player_name)}&resolved=eq.false&select=id`),
+    ]);
+    const levels = (homesteadRows || []).map(r => r.level || 1);
+    const maxLevel = levels.length > 0 ? Math.max(...levels) : 1;
+    const cap = colonyCapForHomesteadLevel(maxLevel);
+    const total = myPlanets.length + (colonizationCountRows || []).length;
+    return { total, cap };
+  }
+
   document.getElementById('colonize-modal-cancel').addEventListener('click', closeColonizeModal);
   document.getElementById('colonize-modal').addEventListener('click', (e) => {
     if (e.target.id === 'colonize-modal') closeColonizeModal();
@@ -6827,6 +6944,28 @@
     // least once for this planet before any colonize launch can actually go
     // through, closing that window.
     if (!fleetCapDataReady) { msg.textContent = '資料同步中,請稍候片刻再試'; return; }
+
+    // FEATURE: 可殖民星球數量上限 — authoritative, live re-check right before
+    // actually launching (see fetchAccountColonyStatus()'s own comment for
+    // why this can't just trust the cached flags renderExplorationLog()/
+    // renderKnownPlanets() used to decide whether to even show this modal's
+    // 殖民 button in the first place).
+    const okBtnForCapCheck = document.getElementById('colonize-modal-ok');
+    okBtnForCapCheck.disabled = true;
+    let colonyStatus;
+    try {
+      colonyStatus = await fetchAccountColonyStatus();
+    } catch (err) {
+      console.error('Fetch account colony status error:', err);
+      msg.textContent = '無法確認殖民地數量上限,請稍後再試';
+      okBtnForCapCheck.disabled = false;
+      return;
+    }
+    okBtnForCapCheck.disabled = false;
+    if (colonyStatus.total >= colonyStatus.cap) {
+      msg.textContent = `已達到殖民地數量上限(目前 ${colonyStatus.total} / ${colonyStatus.cap} 顆,含在途中的殖民艦隊)——把任一顆星球的拓荒者營地升級可以擴增上限`;
+      return;
+    }
 
     if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
     if (mothership < 1) { msg.textContent = '殖民必須指派至少 1 艘殖民母艦'; return; }
