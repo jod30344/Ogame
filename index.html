@@ -4,6 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>星塵方舟：起源</title>
+<!-- PWA: lets a phone browser "加入主畫面/安裝應用程式" into something that
+     opens full-screen with its own icon, instead of staying a regular
+     browser tab. See manifest.webmanifest + sw.js sitting next to this file
+     — both must be uploaded alongside it (same folder, same filenames) for
+     any of this to take effect; a bare file:// open (no real web server)
+     also won't register the service worker below, since that requires a
+     secure context (https, or localhost during testing). -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b1220">
+<link rel="icon" href="icon-32.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<!-- iOS Safari still leans on these dedicated tags rather than fully trusting
+     the manifest above for "加入主畫面" — kept alongside it for best coverage
+     across iOS and Android. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="星塵方舟">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -7745,6 +7763,23 @@
   // Try to skip straight past the login screen if this device already has a
   // remembered, still-valid session.
   attemptAutoLogin();
+</script>
+<script>
+  // PWA: registers the service worker that lets the game be "installed"
+  // (加入主畫面) and gives it an offline-safe app shell. Deliberately kept in
+  // its own tiny script tag, separate from the main game logic above — this
+  // is purely an install/caching concern, nothing here should ever need to
+  // know about game state. Safe to no-op: browsers that don't support service
+  // workers (or a page opened via plain file://, which isn't a secure
+  // context) just skip this silently and the game itself is completely
+  // unaffected either way.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(err => {
+        console.error('Service worker registration failed:', err);
+      });
+    });
+  }
 </script>
 </body>
 </html>
