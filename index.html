@@ -115,6 +115,47 @@
   }
   h1 { font-family: 'Space Mono', monospace; font-size: 28px; margin: 6px 0 2px; font-weight: 700; }
   .sub { color: var(--text-dim); font-size: 14px; }
+  .planet-name-row { display: flex; align-items: center; gap: 6px; }
+  .planet-rename-btn {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0;
+    opacity: 0.7;
+    transition: color 0.15s ease, opacity 0.15s ease;
+  }
+  .planet-rename-btn svg { width: 13px; height: 13px; }
+  .planet-rename-btn:hover { color: var(--warn); opacity: 1; }
+  .planet-rename-form { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .planet-rename-form.hidden { display: none; }
+  .planet-rename-form input {
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    color: var(--text-main);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 13px;
+    width: 160px;
+  }
+  .planet-rename-form input:focus { border-color: var(--warn); outline: none; }
+  .planet-rename-save, .planet-rename-cancel {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .planet-rename-save:hover { border-color: var(--ok); color: var(--ok); }
+  .planet-rename-cancel:hover { border-color: var(--warn); color: var(--warn); }
   .signout {
     background: none;
     border: 1px solid var(--line);
@@ -974,7 +1015,15 @@
 <div class="wrap hidden" id="game-screen">
   <header>
     <div>
-      <div class="eyebrow" id="coord-label">星系座標</div>
+      <div class="planet-name-row">
+        <div class="eyebrow" id="coord-label">星系座標</div>
+        <button class="planet-rename-btn" id="planet-rename-btn" type="button" aria-label="為這顆星球命名" title="為這顆星球命名"></button>
+      </div>
+      <div class="planet-rename-form hidden" id="planet-rename-form">
+        <input type="text" id="planet-rename-input" maxlength="20" placeholder="為這顆星球取個名字">
+        <button class="planet-rename-save" id="planet-rename-save" type="button">儲存</button>
+        <button class="planet-rename-cancel" id="planet-rename-cancel" type="button">取消</button>
+      </div>
       <h1 id="planet-title">殖民地</h1>
       <div class="sub">星塵方舟，從無到有，星海乾坤，任你遨遊。</div>
     </div>
@@ -1850,6 +1899,9 @@
   // as the other icons above, shared by every ship-type card's auto-produce
   // button (see renderFleetRoster()).
   const AUTO_PRODUCE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>';
+  // Rename-pencil icon for the per-planet 命名 (nickname) button next to
+  // `#coord-label` — see renderPlanetNameLabel()/savePlanetNickname() below.
+  const PENCIL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
   // Small inline-SVG glyphs per building type, for immersion on plot cards —
   // no external image assets, so the file stays fully self-contained.
@@ -2270,7 +2322,7 @@
   // Global state
   // ============================================================
   let planet = null;
-  let myPlanets = [];           // every planet row owned by the logged-in player, sorted by id (home first)
+  let myPlanets = [];           // every planet row owned by the logged-in player, sorted by created_at (home/oldest first — see migration.sql section 22; NOT id, which is a random uuid in this project and was never actually chronological)
   let ownBuildings = [];       // rows from `buildings` for this planet
   let constructionRows = [];   // rows from `construction_queue`, status != done
   let shipQueueRows = [];      // rows from `ship_queue`, status != done
@@ -2823,7 +2875,15 @@
 
   async function loadPlanetsAndEnter(name) {
     const encodedName = encodeURIComponent(name);
-    let rows = await restRequest(`planets?player_name=eq.${encodedName}&select=*&order=id.asc`);
+    // BUG FIX: this used to sort `order=id.asc`, treating the lowest id as
+    // the player's home/oldest planet — but `planets.id` is a random uuid in
+    // this project (not a sequential bigint), so alphabetic id order has
+    // never actually matched creation order. Reported by the user, who
+    // noticed their NEWEST colony consistently showing first (★) instead of
+    // their original planet. `created_at` (migration.sql section 22) is a
+    // real timestamp, backfilled for existing planets from their originating
+    // colonization mission's `arrival_time` where one exists.
+    let rows = await restRequest(`planets?player_name=eq.${encodedName}&select=*&order=created_at.asc`);
     let planets = rows || [];
     let isNewPlanet = false;
 
@@ -2947,7 +3007,8 @@
     loginScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
     document.getElementById('planet-title').textContent = name + ' 的殖民地';
-    document.getElementById('coord-label').textContent = `星系座標 ${planet.coord}`;
+    renderPlanetNameLabel();
+    document.getElementById('planet-rename-form').classList.add('hidden');
 
     lastTickLocal = Date.now();
     localMetal = Number(planet.metal);
@@ -3034,7 +3095,8 @@
     localCrystal = Number(planet.crystal);
     localFood = Number(planet.food || STARTING_FOOD);
     lastTickLocal = Date.now();
-    document.getElementById('coord-label').textContent = `星系座標 ${planet.coord}`;
+    renderPlanetNameLabel();
+    document.getElementById('planet-rename-form').classList.add('hidden');
     document.getElementById('planet-title').textContent = planet.player_name + ' 的殖民地';
     renderFleetRoster();
     renderResources();
@@ -3063,8 +3125,17 @@
     container.classList.remove('hidden');
     container.innerHTML = myPlanets.map((p, i) => {
       const isActive = planet && String(p.id) === String(planet.id);
+      // `i === 0` is genuinely the home/oldest planet now — `myPlanets` is
+      // loaded `order=created_at.asc` (see migration.sql section 22; this
+      // used to be `order=id.asc`, which — since planets.id is a random
+      // uuid in this project — never actually reflected creation order).
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
-      return `<button class="planet-tab${isActive ? ' active' : ''}" data-planet-id="${p.id}" type="button">${homeMark}座標 ${p.coord}</button>`;
+      // A named planet shows its nickname instead of the bare coordinate
+      // (see renderPlanetNameLabel()/savePlanetNickname() below) — the
+      // coordinate is still available via the tab's title tooltip so it's
+      // never fully hidden, just not the primary label once a name is set.
+      const label = p.nickname ? p.nickname : `座標 ${p.coord}`;
+      return `<button class="planet-tab${isActive ? ' active' : ''}" data-planet-id="${p.id}" type="button" title="座標 ${p.coord}">${homeMark}${label}</button>`;
     }).join('');
     container.querySelectorAll('button[data-planet-id]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -3072,6 +3143,72 @@
         if (target) switchToPlanet(target);
       });
     });
+  }
+
+  // 星球命名 (planet nicknames) — per explicit user request, alongside the
+  // `created_at`/home-planet ordering fix above (the user's own confusion
+  // about "which planet is my real home" was itself the report that
+  // surfaced that bug). A nickname is purely cosmetic/local to this planet's
+  // `planets` row (`nickname`, migration.sql section 22) — it doesn't affect
+  // coordinates, targeting, or anything else; a planet with no nickname set
+  // just shows its coordinate exactly as before.
+  //
+  // `#coord-label` is the one place every planet already shows a
+  // per-planet-distinguishing label (unlike `#planet-title`, which is just
+  // "{player_name} 的殖民地" regardless of which colony is being viewed) — so
+  // that's where the nickname is surfaced, right beside the rename button.
+  function renderPlanetNameLabel() {
+    const label = document.getElementById('coord-label');
+    if (!label || !planet) return;
+    label.textContent = planet.nickname ? `${planet.nickname} · 座標 ${planet.coord}` : `星系座標 ${planet.coord}`;
+  }
+
+  document.getElementById('planet-rename-btn').innerHTML = PENCIL_ICON;
+  document.getElementById('planet-rename-btn').addEventListener('click', () => {
+    if (!planet) return;
+    const input = document.getElementById('planet-rename-input');
+    input.value = planet.nickname || '';
+    document.getElementById('planet-rename-form').classList.remove('hidden');
+    input.focus();
+    input.select();
+  });
+  document.getElementById('planet-rename-cancel').addEventListener('click', () => {
+    document.getElementById('planet-rename-form').classList.add('hidden');
+  });
+  document.getElementById('planet-rename-save').addEventListener('click', savePlanetNickname);
+  document.getElementById('planet-rename-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') savePlanetNickname();
+    if (e.key === 'Escape') document.getElementById('planet-rename-form').classList.add('hidden');
+  });
+
+  // Empty input clears the nickname back to just showing the coordinate —
+  // same "blank means unset" convention the rest of this file already uses
+  // (e.g. 攜帶糧食 "bring 0 = start with 0"), not a rejected/no-op state.
+  async function savePlanetNickname() {
+    if (!planet) return;
+    const input = document.getElementById('planet-rename-input');
+    const raw = input.value.trim();
+    const nickname = raw.length > 0 ? raw.slice(0, 20) : null;
+    const saveBtn = document.getElementById('planet-rename-save');
+    saveBtn.disabled = true;
+    try {
+      await restRequest(`planets?id=eq.${planet.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ nickname }),
+      });
+      planet.nickname = nickname;
+      const idx = myPlanets.findIndex(p => String(p.id) === String(planet.id));
+      if (idx >= 0) myPlanets[idx].nickname = nickname;
+      document.getElementById('planet-rename-form').classList.add('hidden');
+      renderPlanetNameLabel();
+      renderPlanetSwitcher();
+      showToast(nickname ? `已將這顆星球命名為「${nickname}」` : '已清除這顆星球的名稱', 'success');
+    } catch (err) {
+      console.error('Rename planet error:', err);
+      showToast('命名失敗,請稍後再試', 'danger');
+    } finally {
+      saveBtn.disabled = false;
+    }
   }
 
   // Populates the 移防 destination <select> with every OTHER planet the
@@ -5086,9 +5223,9 @@
     try {
       const encodedTarget = encodeURIComponent(targetName);
       // A defender may own several planets — attack always resolves to their
-      // home (lowest-id) planet for now; hitting a specific colony is a
-      // follow-up feature.
-      const rows = await restRequest(`planets?player_name=eq.${encodedTarget}&select=*&order=id.asc`);
+      // home (oldest — see `created_at`, migration.sql section 22) planet
+      // for now; hitting a specific colony is a follow-up feature.
+      const rows = await restRequest(`planets?player_name=eq.${encodedTarget}&select=*&order=created_at.asc`);
       const defenderPlanet = rows && rows.length > 0 ? rows[0] : null;
 
       if (!defenderPlanet) { msg.textContent = '找不到這位玩家'; attackBtn.disabled = false; return; }
@@ -5179,7 +5316,10 @@
   async function resolveRecalledAttack(mission) {
     const rows = mission.attacker_planet_id
       ? await restRequest(`planets?id=eq.${mission.attacker_planet_id}&select=*`)
-      : await restRequest(`planets?player_name=eq.${encodeURIComponent(mission.attacker_name)}&select=*&order=id.asc`);
+      // Fallback for legacy rows with no attacker_planet_id — resolves to
+      // the home (oldest, by created_at) planet, same fix as every other
+      // `order=id.asc` "home planet" lookup — see migration.sql section 22.
+      : await restRequest(`planets?player_name=eq.${encodeURIComponent(mission.attacker_name)}&select=*&order=created_at.asc`);
     const attackerPlanet = rows && rows[0];
     if (!attackerPlanet) return;
     const shipsBack = mission.fighter_ships_sent || mission.ships_sent || 0;
@@ -5237,15 +5377,16 @@
     }
 
     // Resolve by the exact planet id the mission recorded when it launched
-    // (multi-planet players can own several); fall back to name lookup only
-    // for old rows from before that column existed.
+    // (multi-planet players can own several); fall back to a home-planet
+    // (created_at-ordered — see migration.sql section 22) lookup only for
+    // old rows from before that column existed.
     const [attackerRows, defenderRows] = await Promise.all([
       mission.attacker_planet_id
         ? restRequest(`planets?id=eq.${mission.attacker_planet_id}&select=*`)
-        : restRequest(`planets?player_name=eq.${encodeURIComponent(mission.attacker_name)}&select=*&order=id.asc`),
+        : restRequest(`planets?player_name=eq.${encodeURIComponent(mission.attacker_name)}&select=*&order=created_at.asc`),
       mission.defender_planet_id
         ? restRequest(`planets?id=eq.${mission.defender_planet_id}&select=*`)
-        : restRequest(`planets?player_name=eq.${encodeURIComponent(mission.defender_name)}&select=*&order=id.asc`),
+        : restRequest(`planets?player_name=eq.${encodeURIComponent(mission.defender_name)}&select=*&order=created_at.asc`),
     ]);
     const attackerPlanet = attackerRows && attackerRows[0];
     const defenderPlanet = defenderRows && defenderRows[0];
@@ -5712,7 +5853,9 @@
     msg.textContent = '送出請求中...';
     try {
       const encodedTarget = encodeURIComponent(targetName);
-      const rows = await restRequest(`planets?player_name=eq.${encodedTarget}&select=*&order=id.asc`);
+      // Resolves to the target's home (oldest, by created_at) planet — see
+      // migration.sql section 22.
+      const rows = await restRequest(`planets?player_name=eq.${encodedTarget}&select=*&order=created_at.asc`);
       const defenderPlanet = rows && rows.length > 0 ? rows[0] : null;
       if (!defenderPlanet) { msg.textContent = '找不到這位玩家'; return; }
 
