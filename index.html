@@ -321,7 +321,7 @@
      — see 自動建築升級, automation_institute LV2). Same footprint as a
      step-btn so the row doesn't reflow, but tinted with --automation (the
      same accent used on the automation_institute plot icon) once active. */
-  .fleet-build-row .auto-btn, .plot-upgrade-row .auto-btn {
+  .fleet-build-row .auto-btn, .plot-upgrade-row .auto-btn, #explore-card .auto-btn {
     width: 34px;
     height: 34px;
     flex-shrink: 0;
@@ -335,16 +335,17 @@
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
-  .fleet-build-row .auto-btn svg, .plot-upgrade-row .auto-btn svg { width: 18px; height: 18px; }
-  .fleet-build-row .auto-btn:hover:not(:disabled), .plot-upgrade-row .auto-btn:hover:not(:disabled) { border-color: var(--automation); color: var(--automation); }
-  .fleet-build-row .auto-btn.active, .plot-upgrade-row .auto-btn.active {
+  .fleet-build-row .auto-btn svg, .plot-upgrade-row .auto-btn svg, #explore-card .auto-btn svg { width: 18px; height: 18px; }
+  .fleet-build-row .auto-btn:hover:not(:disabled), .plot-upgrade-row .auto-btn:hover:not(:disabled), #explore-card .auto-btn:hover:not(:disabled) { border-color: var(--automation); color: var(--automation); }
+  .fleet-build-row .auto-btn.active, .plot-upgrade-row .auto-btn.active, #explore-card .auto-btn.active {
     background: rgba(95,208,224,0.16);
     border-color: var(--automation);
     color: var(--automation);
   }
-  .fleet-build-row .auto-btn:disabled, .plot-upgrade-row .auto-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .fleet-build-row .auto-btn:disabled, .plot-upgrade-row .auto-btn:disabled, #explore-card .auto-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .plot-upgrade-row { display: flex; align-items: center; gap: 8px; }
   .plot-upgrade-row button.upgrade { flex: 1; min-width: 0; }
+  .explore-auto-status { font-size: 12px; color: var(--automation); width: 100%; margin-top: 2px; }
   .fleet-build-hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
   .fleet-build-hint.error { color: var(--warn); }
   .fleet-build-hint.auto-active { color: var(--automation); }
@@ -1071,8 +1072,10 @@
       </div>
       <div class="explore-food-estimate" id="explore-food-estimate"></div>
       <button class="max-btn" id="explore-smart-formation-btn" type="button">智能編隊</button>
+      <button class="auto-btn hidden" id="explore-auto-btn" type="button" aria-label="自動探索"></button>
       <button class="upgrade" id="explore-launch-btn" type="button">派遣探索</button>
       <div class="attack-msg" id="explore-msg"></div>
+      <div class="explore-auto-status hidden" id="explore-auto-status"></div>
     </div>
     <div id="explore-in-progress"></div>
     <div id="explore-log"></div>
@@ -1278,13 +1281,14 @@
     // planet like the intel center (see hasAutomationInstitute()). Its own
     // level unlocks named automation features: LV1 自動生產艦隊 (see
     // isAutoProducing()), LV2 自動建築升級 (see hasAutoBuildUpgrade()/
-    // maybeAutoQueueBuildingUpgrades()) — both actually wired up now, per
-    // the user's own LV2 design pitch. Per explicit user request, this
-    // version locks it at LV2 (see BUILDING_MAX_LEVEL below) — no upgrade
-    // path exists past that yet regardless of resources — and its LV1
-    // build cost is priced as a MASSIVE investment, same rationale as the
-    // intel center above (a unique, high-impact building shouldn't be
-    // casually affordable); the LV1→2 upgrade inherits the same steep
+    // maybeAutoQueueBuildingUpgrades()), LV3 自動探索 (see hasAutoExplore()/
+    // maybeAutoQueueExploration()) — all three actually wired up now. Per
+    // explicit user request, this version locks it at LV3 (see
+    // BUILDING_MAX_LEVEL below) — no upgrade path exists past that yet
+    // regardless of resources — and its LV1 build cost is priced as a
+    // MASSIVE investment, same rationale as the intel center above (a
+    // unique, high-impact building shouldn't be casually affordable); every
+    // upgrade (LV1→2, LV2→3) inherits the same steep
     // UNIQUE_BUILDING_COST_GROWTH curve intel_center's own upgrades use.
     automation_institute: { name: '自動化研究院', resource: null, baseCost: { metal: 12000, crystal: 14000 },        baseBuildSeconds: 380 },
     // The colony's civilization-level capstone — always plot 0, never buildable
@@ -1343,7 +1347,7 @@
   // indefinitely, same as before). Raising a cap here — like
   // MAX_HOMESTEAD_LEVEL — is meant to be a deliberate future-update decision,
   // not something that happens automatically.
-  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 2 };
+  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 3 };
   function buildingMaxLevel(type) {
     return BUILDING_MAX_LEVEL[type] || Infinity;
   }
@@ -1687,10 +1691,35 @@
   function autoUpgradeEligible(type) {
     return type !== 'homestead' && type !== 'intel_center' && type !== 'automation_institute';
   }
+  // 自動探索 (automated exploration) — the automation institute's THIRD named
+  // unlock (LV3), alongside 自動生產艦隊 (LV1) and 自動建築升級 (LV2) above. Per
+  // the user's own pitch: lock in a fixed scout/fighter/transport formation
+  // and duration tier once, and from then on, whenever there's a free
+  // concurrent exploration slot (see explorationCapForHomesteadLevel()), the
+  // game automatically launches another "discover" mission with that same
+  // locked formation — no more manually re-clicking 派遣探索 every time a
+  // fleet returns. See toggleAutoExplore() (the per-planet on/off switch,
+  // capturing the formation) and maybeAutoQueueExploration() (the queueing
+  // loop, called from pollUpdates()).
+  //
+  // Deliberately does NOT cover 偵查 (recon, `mode: 'recon'` — see
+  // onRecon-equivalent launch code): a recon mission targets one specific
+  // coordinate the player picks each time, which doesn't fit a "repeat the
+  // same thing forever" model the way a formation-only 探索 launch does —
+  // this is a documented scope decision, not an oversight.
+  function hasAutoExplore() {
+    return automationInstituteLevel() >= 3;
+  }
+  // Same "toggle AND institute still standing" pattern as isAutoProducing()
+  // below — automation silently pauses if the institute is ever demolished
+  // and resumes on its own if rebuilt, no special-case code needed.
+  function isAutoExploring() {
+    return hasAutoExplore() && !!(planet && planet.auto_explore);
+  }
   // 自動生產艦隊 (automated ship production) — the first of the automation
-  // institute's two named unlocks (自動建築升級, the LV2 unlock, is defined
-  // above — hasAutoBuildUpgrade()/autoUpgradeEligible()). Whether a given
-  // ship type is
+  // institute's three named unlocks (自動建築升級, the LV2 unlock, and 自動探索,
+  // the LV3 unlock, are defined above — hasAutoBuildUpgrade()/
+  // autoUpgradeEligible()/hasAutoExplore()). Whether a given ship type is
   // currently auto-producing on THIS planet is the AND of two things: the
   // player's own toggle, stored on `planet[auto_produce_${type}]` so it
   // survives reloads/device switches, AND the institute still physically
@@ -2329,6 +2358,12 @@
   // uniformly without skipping every other unrelated poll-cycle operation
   // whenever two cycles happen to overlap.
   let autoProduceQueueInProgress = false;
+  // Same re-entrancy-guard rationale as autoProduceQueueInProgress just
+  // above, for maybeAutoQueueExploration() — an overlapping poll cycle (or a
+  // toggleAutoExplore()-triggered immediate kick racing an in-flight poll)
+  // could otherwise both read the same pre-launch explorationRows.length and
+  // both launch, overshooting the concurrent-mission cap.
+  let autoExploreQueueInProgress = false;
 
   let localMetal = 0;
   let localCrystal = 0;
@@ -2923,6 +2958,7 @@
     renderResources();
     renderPlanetSwitcher();
     renderExplorationTierPicker();
+    renderAutoExploreControl();
     tickInterval = setInterval(tick, 500);
     scheduleSave();
     pollUpdates(); // first load: buildings, construction, ships, missions, battles
@@ -3003,6 +3039,7 @@
     renderFleetRoster();
     renderResources();
     renderPlanetSwitcher();
+    renderAutoExploreControl();
     renderPlots();
     renderProductionQueue();
     renderMovementLog();
@@ -3218,6 +3255,14 @@
     // instead of waiting for the next poll.
     await maybeAutoQueueProduction();
     await loadShipQueue();
+    // 自動探索 — same reasoning/placement as maybeAutoQueueProduction() just
+    // above: needs explorationRows (loadExplorationData(), earlier this same
+    // cycle) and fleetCapDataReady (just set true above) both trustworthy
+    // before its own slot-cap/ship-availability checks mean anything. Each
+    // launch this makes already reloads explorationRows internally (see
+    // launchExploration()'s own loadExplorationData() call), so no separate
+    // reload is needed here the way loadShipQueue() needs one above.
+    await maybeAutoQueueExploration();
     // Runs last, same reasoning as maybeAutoQueueProduction() above: needs
     // cachedMissions (loadFleetMovements) and npcReputationRows/
     // npcPlanetRows (loadNpcData) freshly loaded this cycle before its
@@ -3498,6 +3543,10 @@
       // on every poll cycle: renderFleetRoster() preserves whatever quantity
       // is currently typed into each input rather than resetting it.
       renderFleetRoster();
+      // Same reasoning as renderFleetRoster() just above, for 自動探索's own
+      // toggle/lock state (hasAutoExplore() also only changes when
+      // ownBuildings does).
+      renderAutoExploreControl();
     } catch (err) {
       console.error('Load buildings error:', err);
     }
@@ -4223,12 +4272,14 @@
           // Cumulative unlock list, same style as intel_center just above —
           // 自動生產艦隊 (LV1) is the auto-produce toggle on each
           // fleet-roster card; 自動建築升級 (LV2) is the auto-upgrade toggle
-          // now shown on every eligible plot card below (see
-          // autoUpgradeEligible()). Both are fully live — neither needs a
-          // "not live yet" disclaimer any more.
-          effectLine = building.level >= 2
-            ? `已解鎖:自動生產艦隊、自動建築升級`
-            : `已解鎖:自動生產艦隊`;
+          // shown on every eligible plot card below (see
+          // autoUpgradeEligible()); 自動探索 (LV3) is the auto-explore toggle
+          // on the 探索 screen (see hasAutoExplore()). All three are fully
+          // live — none needs a "not live yet" disclaimer.
+          const automationUnlocks = ['自動生產艦隊'];
+          if (building.level >= 2) automationUnlocks.push('自動建築升級');
+          if (building.level >= 3) automationUnlocks.push('自動探索');
+          effectLine = `已解鎖:${automationUnlocks.join('、')}`;
         } else {
           effectLine = `目前產量 +${miningRate(building.building_type, building.level, def.resource).toFixed(1)} / 秒`;
         }
@@ -5988,6 +6039,142 @@
     updateExploreFoodEstimate();
   }
 
+  // 自動探索 toggle + lock-state rendering. Called once at game start (right
+  // after renderExplorationTierPicker(), same call site pairing as
+  // renderFleetRoster()/loadBuildings() elsewhere), again on every
+  // switchToPlanet() and every loadBuildings() poll (hasAutoExplore() only
+  // changes when ownBuildings does — the institute reaching LV3, or being
+  // demolished), and immediately after toggleAutoExplore() itself. Safe to
+  // call at any time, including before `planet` exists.
+  //
+  // Note: unlike renderFleetRoster()'s auto-produce button (built fresh into
+  // innerHTML every render, since ship types are a dynamic list), the
+  // explore-section markup is static HTML — this function only ever
+  // toggles classes/attributes/text on the same fixed elements, it never
+  // rebuilds them, so it can safely run every poll without fighting
+  // renderExplorationTierPicker()'s own (one-time, at game start) listener
+  // setup.
+  function renderAutoExploreControl() {
+    const btn = document.getElementById('explore-auto-btn');
+    if (!btn) return;
+    const available = !!planet && hasAutoExplore();
+    btn.classList.toggle('hidden', !available);
+    const statusEl = document.getElementById('explore-auto-status');
+    if (!available) {
+      if (statusEl) statusEl.classList.add('hidden');
+      return;
+    }
+    const on = isAutoExploring();
+    btn.classList.toggle('active', on);
+    btn.innerHTML = AUTO_PRODUCE_ICON;
+    btn.title = on
+      ? '自動探索中(點擊關閉)'
+      : '自動探索:鎖定目前欄位的艦隊編制與航程分級,之後只要有空的探索名額就會自動派遣同樣編制的艦隊';
+    btn.setAttribute('aria-label', on ? '關閉自動探索' : '開啟自動探索');
+
+    // While ON, the three ship-count inputs show the LOCKED formation (not
+    // whatever's currently typed) and are read-only — same "no ambiguity
+    // about what's actually governing" treatment as the fleet-roster cards'
+    // own auto-produce lock (see renderFleetRoster()'s own comment).
+    ['scout', 'fighter', 'transport'].forEach(type => {
+      const input = document.getElementById(`explore-${type}-count`);
+      if (!input) return;
+      input.disabled = on;
+      if (on) input.value = planet[`auto_explore_${type}_count`] || 0;
+    });
+    const smartBtn = document.getElementById('explore-smart-formation-btn');
+    if (smartBtn) smartBtn.disabled = on;
+    // Lock the tier picker to the locked tier too, and disable every button
+    // so it can't be changed out from under the running automation —
+    // re-toggling `active` here (rather than re-calling
+    // renderExplorationTierPicker(), which would rebuild the buttons and
+    // double up their click listeners) since that function only ever runs
+    // once at game start.
+    const tierContainer = document.getElementById('explore-tier-picker');
+    if (tierContainer) {
+      const lockedTier = planet.auto_explore_tier || 'short';
+      tierContainer.querySelectorAll('button[data-tier]').forEach(b => {
+        b.disabled = on;
+        b.classList.toggle('active', on ? b.dataset.tier === lockedTier : b.dataset.tier === selectedExplorationTier);
+      });
+    }
+    if (statusEl) {
+      statusEl.classList.toggle('hidden', !on);
+      if (on) {
+        const tier = EXPLORATION_TIERS[planet.auto_explore_tier] || EXPLORATION_TIERS.short;
+        statusEl.textContent = `自動探索中:${tier.name} · ${fmt(planet.auto_explore_scout_count || 0)} 偵察機 · ${fmt(planet.auto_explore_fighter_count || 0)} 戰鬥機 · ${fmt(planet.auto_explore_transport_count || 0)} 運輸艦`;
+      }
+    }
+    updateExploreFoodEstimate();
+  }
+
+  // 自動探索 on/off switch — mirrors toggleAutoProduce()'s exact shape.
+  // Turning ON locks in whatever is CURRENTLY typed into the three
+  // ship-count inputs plus whichever duration tier is currently selected
+  // (selectedExplorationTier) as this planet's permanent auto-explore
+  // formation, persisted to the `planets` columns so it survives
+  // reloads/device switches. Turning OFF is always allowed, no validation.
+  // The actual (re)launching happens separately in
+  // maybeAutoQueueExploration() (called from pollUpdates()) — clicking here
+  // just arms it, with an immediate kick below (same reasoning as
+  // toggleAutoProduce()) so the first mission goes out right away if a slot
+  // is free, rather than waiting up to 8s for the next poll.
+  async function toggleAutoExplore(btn) {
+    if (!planet || !hasAutoExplore()) return;
+    const turningOn = !isAutoExploring();
+    const msg = document.getElementById('explore-msg');
+    let scoutCount = planet.auto_explore_scout_count || 0;
+    let fighterCount = planet.auto_explore_fighter_count || 0;
+    let transportCount = planet.auto_explore_transport_count || 0;
+    let tierKey = planet.auto_explore_tier || 'short';
+    if (turningOn) {
+      scoutCount = Math.max(0, parseInt(document.getElementById('explore-scout-count').value, 10) || 0);
+      fighterCount = Math.max(0, parseInt(document.getElementById('explore-fighter-count').value, 10) || 0);
+      transportCount = Math.max(0, parseInt(document.getElementById('explore-transport-count').value, 10) || 0);
+      tierKey = selectedExplorationTier;
+      // Same hard requirement as a manual launch (see onExploreClick's own
+      // scout-count check) — a formation with no scout can never actually
+      // depart, so refuse to lock one in rather than arming automation that
+      // would just skip forever with a confusing "insufficient ships" hint.
+      if (scoutCount < 1) {
+        if (msg) msg.textContent = '自動探索需至少 1 艘偵察機隨行,才能鎖定編制';
+        return;
+      }
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const body = { auto_explore: turningOn };
+      if (turningOn) {
+        body.auto_explore_scout_count = scoutCount;
+        body.auto_explore_fighter_count = fighterCount;
+        body.auto_explore_transport_count = transportCount;
+        body.auto_explore_tier = tierKey;
+      }
+      await restRequest(`planets?id=eq.${planet.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      planet.auto_explore = turningOn;
+      if (turningOn) {
+        planet.auto_explore_scout_count = scoutCount;
+        planet.auto_explore_fighter_count = fighterCount;
+        planet.auto_explore_transport_count = transportCount;
+        planet.auto_explore_tier = tierKey;
+      }
+      showToast(turningOn
+        ? `已開啟自動探索:${EXPLORATION_TIERS[tierKey].name} · ${scoutCount} 偵察機 · ${fighterCount} 戰鬥機 · ${transportCount} 運輸艦`
+        : '已關閉自動探索', 'success');
+    } catch (err) {
+      console.error('Toggle auto-explore error:', err);
+      showToast('自動探索設定失敗,請稍後再試', 'danger');
+    } finally {
+      if (btn) btn.disabled = false;
+      renderAutoExploreControl();
+      if (turningOn) {
+        await maybeAutoQueueExploration();
+        await loadExplorationData();
+      }
+    }
+  }
+  document.getElementById('explore-auto-btn').addEventListener('click', (e) => toggleAutoExplore(e.currentTarget));
+
   document.getElementById('explore-launch-btn').addEventListener('click', onExploreClick);
 
   function onExploreClick() {
@@ -6037,9 +6224,17 @@
     );
   }
 
-  async function launchExploration(scoutCount, fighterCount, transportCount) {
+  // `tierOverride` lets a caller launch a specific tier without going through
+  // (or disturbing) the player's own `selectedExplorationTier` UI selection —
+  // added for maybeAutoQueueExploration(), which launches on the LOCKED tier
+  // captured when 自動探索 was turned on, regardless of whatever tier button
+  // the player currently has highlighted in the picker. Every other existing
+  // call site (onExploreClick()) omits it and keeps reading the live picker
+  // selection exactly as before.
+  async function launchExploration(scoutCount, fighterCount, transportCount, tierOverride) {
     const msg = document.getElementById('explore-msg');
-    const tier = EXPLORATION_TIERS[selectedExplorationTier];
+    const tierKey = tierOverride || selectedExplorationTier;
+    const tier = EXPLORATION_TIERS[tierKey];
     const launchTime = new Date();
     const arrivalTime = new Date(launchTime.getTime() + tier.seconds * 1000);
 
@@ -6063,7 +6258,7 @@
           scout_ships_sent: scoutCount,
           fighter_ships_sent: fighterCount,
           transport_ships_sent: transportCount,
-          duration_tier: selectedExplorationTier,
+          duration_tier: tierKey,
           launch_time: launchTime.toISOString(),
           arrival_time: arrivalTime.toISOString(),
           resolved: false,
@@ -6074,6 +6269,75 @@
     } catch (err) {
       console.error('Launch exploration error:', err);
       msg.textContent = '派遣失敗:' + ((err && err.message) || String(err));
+    }
+  }
+
+  // 自動探索 (automated exploration) — the automation institute's LV3 unlock.
+  // Runs every poll cycle (see pollUpdates(), called after loadExplorationData()
+  // so explorationRows/fleetCapDataReady are both fresh for this cycle).
+  // While planet.auto_explore is on, keeps launching MORE "discover" missions
+  // — the same locked scout/fighter/transport formation + duration tier
+  // captured when the toggle was switched on — for as long as there's a free
+  // concurrent-mission slot (see explorationCapForHomesteadLevel()) and the
+  // locked formation is actually affordable right now. Same "skip this cycle,
+  // retry next poll, never turn itself off" philosophy as autoQueueBatch()
+  // above, for the same reason: a temporary ship/food shortage isn't a
+  // reason to give up on automation the player explicitly turned on.
+  //
+  // Unlike ship production (a single outstanding order per type, refilled
+  // only once THAT one finishes), exploration's only concurrency limit is
+  // the shared slot cap itself — there's no separate "already has one
+  // queued" check to make — so this loops and fills every currently-free
+  // slot in one pass (not just one), since several slots can plausibly be
+  // open at once (e.g. right after a homestead upgrade raises the cap, or
+  // after several missions return within the same poll window). Each
+  // successful launchExploration() call already awaits loadExplorationData()
+  // internally (see its own body), which re-fetches explorationRows fresh
+  // from the server — so the while condition below always sees the real
+  // post-launch count on its next check, no local-array push workaround
+  // needed the way autoQueueBatch() needs one for shipQueueRows.
+  async function maybeAutoQueueExploration() {
+    if (!planet || !hasAutoExplore() || !planet.auto_explore) return;
+    if (autoExploreQueueInProgress) return;
+    autoExploreQueueInProgress = true;
+    try {
+      // Same guard as autoQueueBatch() — see fleetCapDataReady's declaration
+      // comment; explorationRows itself is one of the things that flag
+      // protects against reading a not-yet-repopulated (falsely-empty) array.
+      if (!fleetCapDataReady) return;
+      const scoutCount = planet.auto_explore_scout_count || 0;
+      const fighterCount = planet.auto_explore_fighter_count || 0;
+      const transportCount = planet.auto_explore_transport_count || 0;
+      const tierKey = planet.auto_explore_tier || 'short';
+      const tier = EXPLORATION_TIERS[tierKey];
+      // Defensive only — the UI never locks in an invalid formation/tier
+      // (toggleAutoExplore() requires scoutCount >= 1 up front), but stay
+      // safe against a hand-edited/legacy row rather than looping forever.
+      if (!tier || scoutCount < 1) return;
+      const cap = explorationCapForHomesteadLevel(homesteadLevel());
+      const msg = document.getElementById('explore-msg');
+      // `guard` bounds the loop at the cap size itself — there is no way to
+      // legitimately need more than `cap` iterations in one pass, so this is
+      // purely a defensive backstop against an unexpected infinite loop, not
+      // a normal exit condition.
+      let guard = 0;
+      while (explorationRows.length < cap && guard < cap) {
+        guard++;
+        if (scoutCount > (planet.scout_count || 0) ||
+            fighterCount > (planet.fighter_count || 0) ||
+            transportCount > (planet.transport_count || 0)) {
+          if (msg) msg.textContent = `自動探索等待中:艦隊數量不足(需要 ${fmt(scoutCount)} 偵察機 · ${fmt(fighterCount)} 戰鬥機 · ${fmt(transportCount)} 運輸艦),補足後會自動派遣`;
+          break;
+        }
+        const foodCost = missionFoodCost({ scout: scoutCount, fighter: fighterCount, transport: transportCount }, tier.seconds);
+        if (foodCost > localFood) {
+          if (msg) msg.textContent = `自動探索等待中:糧食不足(此次需要 ${fmt(foodCost)}),累積足夠後會自動派遣`;
+          break;
+        }
+        await launchExploration(scoutCount, fighterCount, transportCount, tierKey);
+      }
+    } finally {
+      autoExploreQueueInProgress = false;
     }
   }
 
@@ -6485,7 +6749,13 @@
         ? `執行中的任務量已達上限`
         : `剩餘派遣名額:${explorationCap - explorationRows.length} / ${explorationCap}`;
       slotsNote.classList.toggle('full', atCap);
-      if (launchBtn) launchBtn.disabled = atCap;
+      // Also stays disabled while 自動探索 owns the launch button (see
+      // renderAutoExploreControl()) — this function re-renders on every poll
+      // (loadExplorationData()) regardless of automation state, so it must
+      // fold isAutoExploring() into its own disabled check rather than
+      // trusting whatever renderAutoExploreControl() set last, or a poll
+      // landing after it would silently re-enable manual launch mid-lock.
+      if (launchBtn) launchBtn.disabled = atCap || isAutoExploring();
     }
 
     progressContainer.innerHTML = explorationRows.map(m => {
