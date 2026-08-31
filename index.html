@@ -220,6 +220,23 @@
   button.upgrade:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Plots grid */
+  .plots-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  .plot-sort-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .plot-sort-btn svg { width: 14px; height: 14px; }
+  .plot-sort-btn:hover { border-color: var(--ok); color: var(--ok); }
   .plots-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
   .plot-card {
     background: var(--bg-panel);
@@ -229,8 +246,30 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    position: relative;
   }
   .plot-card.empty { border-style: dashed; }
+  .plot-card.dragging { z-index: 50; box-shadow: 0 10px 28px rgba(0,0,0,0.4); cursor: grabbing; }
+  .plot-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .plot-drag-handle {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: grab;
+    opacity: 0.55;
+    padding: 0;
+    touch-action: none;
+    transition: color 0.15s ease, opacity 0.15s ease;
+  }
+  .plot-drag-handle:hover { color: var(--ok); opacity: 1; }
+  .plot-drag-handle:active { cursor: grabbing; }
+  .plot-drag-handle svg { width: 16px; height: 16px; }
   .plot-label { font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
   .plot-name-row { display: flex; align-items: baseline; gap: 8px; }
   .plot-name { font-weight: 600; font-size: 15px; }
@@ -1078,7 +1117,10 @@
 
   <div class="section-label">
     <span>建築格</span>
-    <span class="section-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊</span>
+    <span class="section-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊 · 拖曳格子右上角的把手可調整顯示順序</span>
+  </div>
+  <div class="plots-toolbar">
+    <button class="plot-sort-btn" id="plot-sort-btn" type="button">依種類排序</button>
   </div>
   <div class="plots-grid" id="plots-grid"></div>
 
@@ -1902,6 +1944,11 @@
   // Rename-pencil icon for the per-planet 命名 (nickname) button next to
   // `#coord-label` — see renderPlanetNameLabel()/savePlanetNickname() below.
   const PENCIL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  // 建築格拖曳排序 (drag-to-reorder plot cards) — a 6-dot grip, same currentColor
+  // convention as the icons above. Sits in each plot card's label row; see
+  // bindPlotDragHandles()/renderPlots() below.
+  const DRAG_HANDLE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>';
+  const SORT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h6"/><path d="M3 12h10"/><path d="M3 18h14"/><path d="M17 4v14"/><path d="M13 14l4 4 4-4"/></svg>';
 
   // Small inline-SVG glyphs per building type, for immersion on plot cards —
   // no external image assets, so the file stays fully self-contained.
@@ -3211,6 +3258,163 @@
     }
   }
 
+  // 建築格拖曳排序 (drag-to-reorder plot cards) + 依種類排序 (sort by type) —
+  // per explicit user request, from 2 screenshots of the 建設 tab asking for a
+  // way to manually rearrange plot cards, plus a one-click sort, with the
+  // Homestead Camp (plot 0) excluded from ever moving. Deliberately a purely
+  // VISUAL reorder: `plot_index` itself is the real slot identity that
+  // `buildings`, `construction_queue`, and `ship_queue.shipyard_plot_index`
+  // are all keyed on throughout this file, so re-keying it on every drag
+  // would mean rewriting rows across 3 tables just to rearrange icons on
+  // screen — instead, `planets.plot_order integer[]` (migration.sql section
+  // 23) stores only the DISPLAY sequence of plotIndex values; every existing
+  // upgrade/demolish/queue/build code path keeps addressing plots by their
+  // real, unchanged plotIndex exactly as before.
+  //
+  // Returns the plotIndex values 1..totalPlots in the order they should
+  // render: whatever's stored in `planet.plot_order` (deduplicated, and
+  // filtered to only indices still in range — a stale/shrunk array from
+  // before a demolish or before this planet's plot count grew is handled
+  // gracefully rather than erroring), followed by any plotIndex not yet in
+  // that array (a newly-unlocked plot, or before the player has ever
+  // dragged anything) appended in natural ascending order.
+  function plotDisplayOrder(totalPlots) {
+    const stored = Array.isArray(planet && planet.plot_order) ? planet.plot_order : [];
+    const order = [];
+    const seen = new Set();
+    stored.forEach(idx => {
+      const n = Number(idx);
+      if (n >= 1 && n <= totalPlots && !seen.has(n)) {
+        seen.add(n);
+        order.push(n);
+      }
+    });
+    for (let i = 1; i <= totalPlots; i++) {
+      if (!seen.has(i)) order.push(i);
+    }
+    return order;
+  }
+
+  // Re-binds after every renderPlots() call, since grid.innerHTML replaces
+  // every card element each time (same pattern as the other
+  // grid.querySelectorAll(...).forEach(...) bindings just above).
+  function bindPlotDragHandles(grid) {
+    grid.querySelectorAll('.plot-drag-handle').forEach(handle => {
+      handle.addEventListener('pointerdown', onPlotDragStart);
+    });
+  }
+
+  let plotDragCtx = null;
+
+  function onPlotDragStart(e) {
+    if (e.button !== undefined && e.button !== 0) return; // left mouse / primary touch only
+    const card = e.currentTarget.closest('.plot-card[data-drag-plot]');
+    const grid = document.getElementById('plots-grid');
+    if (!card || !grid) return;
+    e.preventDefault();
+    plotDragCtx = { card, grid, startX: e.clientX, startY: e.clientY };
+    card.classList.add('dragging');
+    document.addEventListener('pointermove', onPlotDragMove);
+    document.addEventListener('pointerup', onPlotDragEnd);
+    document.addEventListener('pointercancel', onPlotDragEnd);
+  }
+
+  function onPlotDragMove(e) {
+    if (!plotDragCtx) return;
+    const { card, grid, startX, startY } = plotDragCtx;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    card.style.transform = `translate(${dx}px, ${dy}px)`;
+
+    // Hit-test what's under the pointer, ignoring the card being dragged.
+    card.style.pointerEvents = 'none';
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    card.style.pointerEvents = '';
+    // The homestead card never carries [data-drag-plot], so it can never
+    // match here — the dragged card can never be swapped into its spot.
+    const targetCard = el && el.closest && el.closest('.plot-card[data-drag-plot]');
+    if (targetCard && targetCard !== card && grid.contains(targetCard)) {
+      const children = Array.from(grid.children);
+      const cardIndex = children.indexOf(card);
+      const targetIndex = children.indexOf(targetCard);
+      // Passing the target from before it in DOM order -> drop just after it;
+      // passing it from after -> drop just before it. Classic "shift" reorder.
+      if (cardIndex < targetIndex) {
+        grid.insertBefore(card, targetCard.nextSibling);
+      } else {
+        grid.insertBefore(card, targetCard);
+      }
+      // The card physically moved, so its flowed position changed too —
+      // reset the follow-offset from here rather than accumulating drift.
+      card.style.transform = 'translate(0px, 0px)';
+      plotDragCtx.startX = e.clientX;
+      plotDragCtx.startY = e.clientY;
+    }
+  }
+
+  function onPlotDragEnd() {
+    if (!plotDragCtx) return;
+    const { card } = plotDragCtx;
+    document.removeEventListener('pointermove', onPlotDragMove);
+    document.removeEventListener('pointerup', onPlotDragEnd);
+    document.removeEventListener('pointercancel', onPlotDragEnd);
+    card.classList.remove('dragging');
+    card.style.transform = '';
+    plotDragCtx = null;
+    persistPlotOrderFromDom();
+  }
+
+  // Reads the grid's current DOM order (post-drag, or post-sort-by-type) and
+  // persists it as the new `planets.plot_order`. Updates the in-memory
+  // `planet` object too so a re-render before the PATCH resolves doesn't
+  // visually snap back to the old order.
+  async function persistPlotOrderFromDom() {
+    const grid = document.getElementById('plots-grid');
+    if (!grid || !planet) return;
+    const order = Array.from(grid.querySelectorAll('.plot-card[data-drag-plot]'))
+      .map(c => parseInt(c.dataset.dragPlot, 10));
+    planet.plot_order = order;
+    try {
+      await restRequest(`planets?id=eq.${planet.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ plot_order: order }),
+      });
+    } catch (err) {
+      console.error('Save plot order error:', err);
+      showToast('排序儲存失敗,請稍後再試', 'danger');
+    }
+  }
+
+  // 依種類排序: groups plot cards by building type, in the same canonical
+  // order BUILDING_TYPES itself is declared in (metal_mine, crystal_mine,
+  // farm, shipyard, intel_center, turret, automation_institute — homestead
+  // is excluded, it's never in this array to begin with). A plot mid-
+  // construction or queued sorts by whatever type it's building INTO; a
+  // still-empty plot has no type yet, so it sorts after every occupied/
+  // in-progress plot, in its own original plotIndex order.
+  const PLOT_SORT_TYPE_ORDER = Object.keys(BUILDING_TYPES).filter(t => t !== 'homestead');
+  function sortPlotsByType() {
+    if (!planet) return;
+    const grid = document.getElementById('plots-grid');
+    if (!grid) return;
+    const cards = Array.from(grid.querySelectorAll('.plot-card[data-drag-plot]'));
+    const rank = (plotIndex) => {
+      const building = ownBuildings.find(b => b.plot_index === plotIndex);
+      const construction = constructionRows.find(c => c.plot_index === plotIndex);
+      const type = (building && building.building_type) || (construction && construction.building_type);
+      const idx = type ? PLOT_SORT_TYPE_ORDER.indexOf(type) : -1;
+      return idx === -1 ? PLOT_SORT_TYPE_ORDER.length : idx;
+    };
+    const sorted = cards
+      .map(card => ({ card, plotIndex: parseInt(card.dataset.dragPlot, 10) }))
+      .sort((a, b) => rank(a.plotIndex) - rank(b.plotIndex) || a.plotIndex - b.plotIndex);
+    sorted.forEach(({ card }) => grid.appendChild(card));
+    persistPlotOrderFromDom();
+  }
+
+  document.getElementById('plot-sort-btn').innerHTML = `${SORT_ICON}依種類排序`;
+  document.getElementById('plot-sort-btn').addEventListener('click', sortPlotsByType);
+
   // Populates the 移防 destination <select> with every OTHER planet the
   // player owns (excluding whichever one is currently being viewed) — same
   // placeholder/select toggle pattern as 運輸's target picker
@@ -4325,6 +4529,17 @@
 
   function renderPlots() {
     if (!planet) return;
+    // The countdown ticker (`countdownInterval`, every 1s) calls this to
+    // refresh in-progress build timers — but a real drag gesture can easily
+    // span more than a second, and `grid.innerHTML = html` below would wipe
+    // and recreate every card mid-drag, leaving `plotDragCtx.card` pointing
+    // at an orphaned node that then gets reinserted alongside its freshly
+    // rendered replacement (a visible duplicate). Simplest safe fix: skip
+    // the rebuild entirely while a drag is in flight — progress bars/
+    // countdowns just resume updating on the very next tick once the drag
+    // ends, which is imperceptible, and the live DOM the drag is actively
+    // reordering is left completely undisturbed.
+    if (plotDragCtx) return;
     const grid = document.getElementById('plots-grid');
     // Base plot count comes from the homestead's level, but never shrinks below
     // whatever plot a planet already has something built/queued on — this only
@@ -4340,8 +4555,14 @@
     const queuedList = constructionRows.filter(r => r.status === 'queued').sort((a, b) => new Date(a.queued_at) - new Date(b.queued_at));
 
     let html = renderHomesteadCard(queuedList);
-    for (let i = 0; i < totalPlots; i++) {
-      const plotIndex = i + 1; // plot 0 is reserved for the Homestead Camp above
+    // Visual order only — see plotDisplayOrder()/persistPlotOrderFromDom()
+    // below. `plotIndex` itself (the real slot identity every building/
+    // construction/ship-queue row is keyed on) never changes; dragging or
+    // "依種類排序" only changes which position each plotIndex's card renders
+    // at, via `planets.plot_order` (migration.sql section 23). Plot 0 (the
+    // Homestead Camp, rendered by renderHomesteadCard() above) is never part
+    // of this array, so it can never be dragged out of first place.
+    for (const plotIndex of plotDisplayOrder(totalPlots)) {
       const building = ownBuildings.find(b => b.plot_index === plotIndex);
       const construction = constructionRows.find(c => c.plot_index === plotIndex);
 
@@ -4353,8 +4574,11 @@
         const remaining = Math.max(0, totalSec - elapsedSec);
         const def = BUILDING_TYPES[construction.building_type];
         const isDemolish = construction.target_level === 0;
-        html += `<div class="plot-card${isDemolish ? ' demolishing' : ''}">
-          <div class="plot-label">格 ${plotIndex + 1} · ${isDemolish ? '拆除中' : '建造中'}</div>
+        html += `<div class="plot-card${isDemolish ? ' demolishing' : ''}" data-drag-plot="${plotIndex}">
+          <div class="plot-label-row">
+            <div class="plot-label">格 ${plotIndex + 1} · ${isDemolish ? '拆除中' : '建造中'}</div>
+            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          </div>
           <div class="plot-head">
             <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
             <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
@@ -4370,8 +4594,11 @@
         // Now precomputed at queue time (see computeConstructionSchedule()),
         // so this is a real ETA, not just "waiting for a poll to promote it."
         const waitRemainingSec = Math.max(0, (new Date(construction.started_at).getTime() - Date.now()) / 1000);
-        html += `<div class="plot-card">
-          <div class="plot-label">格 ${plotIndex + 1} · 排隊中(第 ${position} 順位)</div>
+        html += `<div class="plot-card" data-drag-plot="${plotIndex}">
+          <div class="plot-label-row">
+            <div class="plot-label">格 ${plotIndex + 1} · 排隊中(第 ${position} 順位)</div>
+            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          </div>
           <div class="plot-head">
             <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
             <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
@@ -4449,8 +4676,11 @@
                <button class="upgrade" data-plot="${plotIndex}" data-type="${building.building_type}" data-level="${targetLevel}" ${affordable ? '' : 'disabled'}>升級到 LV ${targetLevel}</button>
                ${autoUpgradeBtnHtml}
              </div>`;
-        html += `<div class="plot-card">
-          <div class="plot-label">格 ${plotIndex + 1}</div>
+        html += `<div class="plot-card" data-drag-plot="${plotIndex}">
+          <div class="plot-label-row">
+            <div class="plot-label">格 ${plotIndex + 1}</div>
+            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          </div>
           <div class="plot-head">
             <div class="plot-icon ${building.building_type}">${BUILDING_ICONS[building.building_type] || ''}</div>
             <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${displayLevel}</span></div>
@@ -4486,8 +4716,11 @@
           const note = type === 'shipyard' && sharedLv > 1 ? `<br>完工即為 LV${sharedLv}` : '';
           return `<button data-plot="${plotIndex}" data-type="${type}" data-level="1" ${affordable ? '' : 'disabled'}><div class="plot-icon small ${type}">${BUILDING_ICONS[type] || ''}</div>${def.name}<br>${fmt(cost.metal)}金屬·${fmt(cost.crystal)}晶體<br>${formatDuration(seconds)}${note}</button>`;
         }).join('');
-        html += `<div class="plot-card empty">
-          <div class="plot-label">格 ${plotIndex + 1} · 空地</div>
+        html += `<div class="plot-card empty" data-drag-plot="${plotIndex}">
+          <div class="plot-label-row">
+            <div class="plot-label">格 ${plotIndex + 1} · 空地</div>
+            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          </div>
           <div class="plot-detail">選擇要建造的設施</div>
           <div class="plot-picker">${options}</div>
         </div>`;
@@ -4530,6 +4763,8 @@
         toggleAutoBuildUpgrade(plotIndex, type, btn);
       });
     });
+
+    bindPlotDragHandles(grid);
   }
 
   // ============================================================
