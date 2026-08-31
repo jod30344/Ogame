@@ -494,6 +494,11 @@
   .ship-input-group { display: flex; flex-direction: column; gap: 4px; }
   .ship-input-label { font-size: 11px; color: var(--text-dim); padding-left: 1px; display: flex; align-items: center; gap: 4px; }
   .ship-input-label svg { width: 13px; height: 13px; flex-shrink: 0; }
+  /* 派遣探索欄位若打的數量超過目前持有量,即時標紅提醒(不必等按下派遣才知道) —
+     跟 .explore-food-estimate.insufficient 用同一套 --warn 提示色。 */
+  .ship-input.insufficient { border-color: var(--warn); }
+  .ship-input-hint { font-size: 11px; color: var(--warn); }
+  .ship-input-hint.hidden { display: none; }
   .explore-slots-note { font-size: 12px; color: var(--text-dim); margin: -4px 0 10px; }
   .explore-slots-note.full { color: var(--warn); }
   .explore-food-estimate { font-size: 12px; color: var(--text-dim); width: 100%; margin: -2px 0 6px; }
@@ -1152,14 +1157,17 @@
       <div class="ship-input-group">
         <label class="ship-input-label" for="explore-scout-count"></label>
         <input type="number" class="ship-input" id="explore-scout-count" min="0" value="0">
+        <div class="ship-input-hint hidden" id="explore-scout-hint"></div>
       </div>
       <div class="ship-input-group">
         <label class="ship-input-label" for="explore-fighter-count"></label>
         <input type="number" class="ship-input" id="explore-fighter-count" min="0" value="0">
+        <div class="ship-input-hint hidden" id="explore-fighter-hint"></div>
       </div>
       <div class="ship-input-group">
         <label class="ship-input-label" for="explore-transport-count"></label>
         <input type="number" class="ship-input" id="explore-transport-count" min="0" value="0">
+        <div class="ship-input-hint hidden" id="explore-transport-hint"></div>
       </div>
       <div class="explore-food-estimate" id="explore-food-estimate"></div>
       <button class="max-btn" id="explore-smart-formation-btn" type="button">智能編隊</button>
@@ -3149,6 +3157,12 @@
     renderResources();
     renderPlanetSwitcher();
     renderAutoExploreControl();
+    // Refreshes the 派遣探索 ship-availability hints against THIS planet's own
+    // fleet the moment you switch to it — the three inputs are static HTML
+    // and don't reset on switch, so a formation typed/left over on a
+    // different (or previously bigger) fleet needs to be re-checked here
+    // rather than waiting for the player to touch a field again.
+    updateExploreFoodEstimate();
     renderPlots();
     renderProductionQueue();
     renderMovementLog();
@@ -3888,6 +3902,10 @@
       // toggle/lock state (hasAutoExplore() also only changes when
       // ownBuildings does).
       renderAutoExploreControl();
+      // Keeps the 派遣探索 ship-availability hints live even if the player
+      // just leaves the fields untouched while ships depart/return elsewhere
+      // — same "safe every poll cycle" reasoning as the renders just above.
+      updateExploreFoodEstimate();
     } catch (err) {
       console.error('Load buildings error:', err);
     }
@@ -6365,6 +6383,30 @@
     updateExploreFoodEstimate();
   });
 
+  // Live 艦隊持有量檢查 — per explicit user request, after they hit "你只有 144
+  // 艘偵察機" from a stale/leftover number in the field (typed while the
+  // planet had more scouts, or left over from before switching planets — the
+  // three explore inputs are static HTML, not reset on every switch, so an
+  // old value can easily outlive the fleet count it was typed against). Same
+  // "tell them before they click, not just after" rationale as
+  // updateExploreFoodEstimate()'s own 糧食不足 preview just below, and reuses
+  // the same --warn treatment. Purely a preview — onExploreClick() remains
+  // the one real (authoritative) gate; this can't be bypassed by skipping it.
+  function updateExploreShipAvailability() {
+    if (!planet) return;
+    ['scout', 'fighter', 'transport'].forEach(type => {
+      const input = document.getElementById(`explore-${type}-count`);
+      const hint = document.getElementById(`explore-${type}-hint`);
+      if (!input || !hint) return;
+      const typed = Math.max(0, parseInt(input.value, 10) || 0);
+      const owned = planet[`${type}_count`] || 0;
+      const short = typed > owned;
+      input.classList.toggle('insufficient', short);
+      hint.classList.toggle('hidden', !short);
+      hint.textContent = short ? `超過持有量(現有 ${fmt(owned)} 艘)` : '';
+    });
+  }
+
   // Live 糧食 cost preview — per explicit user request, recalculated the
   // instant a ship-count field or the duration tier changes, so a player
   // knows whether they can afford the trip BEFORE clicking 派遣探索 instead
@@ -6376,6 +6418,12 @@
   // 500ms) so the "現有" figure stays live even if the player just leaves
   // the fields untouched while food drains from fleet upkeep.
   function updateExploreFoodEstimate() {
+    // Piggybacks the live 艦隊持有量 check onto this function's existing call
+    // sites (every input event, 智能編隊, tier picker init/click, and
+    // renderAutoExploreControl()'s locked-state refresh) rather than adding a
+    // parallel set of call sites — see updateExploreShipAvailability()'s own
+    // comment for what this actually checks.
+    updateExploreShipAvailability();
     const el = document.getElementById('explore-food-estimate');
     if (!el) return;
     const tier = EXPLORATION_TIERS[selectedExplorationTier];
