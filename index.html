@@ -6486,22 +6486,43 @@
     const available = !!planet && hasAutoExplore();
     btn.classList.toggle('hidden', !available);
     const statusEl = document.getElementById('explore-auto-status');
-    if (!available) {
-      if (statusEl) statusEl.classList.add('hidden');
-      return;
+    // BUG FIX: everything below this point — locking/unlocking the 3 ship
+    // inputs, 智能編隊, and the tier-picker buttons — used to live inside an
+    // `if (available) { ... }` block that RETURNED early whenever this
+    // planet's own automation_institute hadn't reached LV3 (i.e. every
+    // colony that doesn't have 自動探索 unlocked at all — most colonies,
+    // since it's a late unlock). Because the explore-section markup is
+    // static HTML shared by every planet (never rebuilt on switch — see this
+    // function's own doc comment), that early return meant: turn 自動探索 ON
+    // on ONE colony (which sets `input.disabled = true` etc. on those SHARED
+    // elements), then switch to ANY other colony, and this function would
+    // return before ever setting `disabled` back to `false` — leaving the
+    // fields permanently locked on every other colony too, until the player
+    // happened to switch back to the automating colony and turn it off
+    // again. Reported by the user ("只要有一顆殖民星打開自動探索,其他沒有這個
+    // 功能的殖民星會被鎖住欄位不能調整、包括也不能按智能編隊"). Fixed by always
+    // computing `on` (false whenever !available) and always running the
+    // lock/unlock logic below, instead of returning early — a colony without
+    // the unlock now correctly re-enables everything the moment you switch
+    // to it, exactly as if 自動探索 had never existed for it.
+    const on = available && isAutoExploring();
+    if (available) {
+      btn.classList.toggle('active', on);
+      btn.innerHTML = AUTO_PRODUCE_ICON;
+      btn.title = on
+        ? '自動探索中(點擊關閉)'
+        : '自動探索:鎖定目前欄位的艦隊編制與航程分級,之後只要有空的探索名額就會自動派遣同樣編制的艦隊';
+      btn.setAttribute('aria-label', on ? '關閉自動探索' : '開啟自動探索');
+    } else if (statusEl) {
+      statusEl.classList.add('hidden');
     }
-    const on = isAutoExploring();
-    btn.classList.toggle('active', on);
-    btn.innerHTML = AUTO_PRODUCE_ICON;
-    btn.title = on
-      ? '自動探索中(點擊關閉)'
-      : '自動探索:鎖定目前欄位的艦隊編制與航程分級,之後只要有空的探索名額就會自動派遣同樣編制的艦隊';
-    btn.setAttribute('aria-label', on ? '關閉自動探索' : '開啟自動探索');
 
     // While ON, the three ship-count inputs show the LOCKED formation (not
     // whatever's currently typed) and are read-only — same "no ambiguity
     // about what's actually governing" treatment as the fleet-roster cards'
-    // own auto-produce lock (see renderFleetRoster()'s own comment).
+    // own auto-produce lock (see renderFleetRoster()'s own comment). Always
+    // runs (not just when `available`), so a colony without the unlock — or
+    // with it off — reliably ends up unlocked here.
     ['scout', 'fighter', 'transport'].forEach(type => {
       const input = document.getElementById(`explore-${type}-count`);
       if (!input) return;
@@ -6515,16 +6536,17 @@
     // re-toggling `active` here (rather than re-calling
     // renderExplorationTierPicker(), which would rebuild the buttons and
     // double up their click listeners) since that function only ever runs
-    // once at game start.
+    // once at game start. Also always runs now, for the same reason as the
+    // ship inputs above.
     const tierContainer = document.getElementById('explore-tier-picker');
     if (tierContainer) {
-      const lockedTier = planet.auto_explore_tier || 'short';
+      const lockedTier = available ? (planet.auto_explore_tier || 'short') : null;
       tierContainer.querySelectorAll('button[data-tier]').forEach(b => {
         b.disabled = on;
         b.classList.toggle('active', on ? b.dataset.tier === lockedTier : b.dataset.tier === selectedExplorationTier);
       });
     }
-    if (statusEl) {
+    if (statusEl && available) {
       statusEl.classList.toggle('hidden', !on);
       if (on) {
         const tier = EXPLORATION_TIERS[planet.auto_explore_tier] || EXPLORATION_TIERS.short;
