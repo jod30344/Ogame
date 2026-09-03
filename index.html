@@ -335,6 +335,65 @@
   @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
   .queue-summary { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
 
+  /* 總覽 (account-wide dashboard) — see the HTML comment above
+     #dashboard-section for the feature's own background. */
+  .dashboard-grand-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .dashboard-grand-totals .res-card { margin: 0; }
+  .dashboard-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .dashboard-alerts:empty { display: none; margin-bottom: 0; }
+  .dash-alert {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(255,107,107,0.08);
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .dash-alert.transport { background: rgba(240,168,80,0.08); border-color: var(--crystal); }
+  .dash-alert-text { color: var(--text-main); }
+  .dash-alert-text .dash-alert-planet { color: var(--text-dim); font-size: 12px; }
+  .dashboard-planets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .dash-planet-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .dash-planet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .dash-planet-name { font-weight: 600; }
+  .dash-goto-btn {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .dash-goto-btn:hover { border-color: var(--ok); color: var(--ok); }
+  .dash-resource-row { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--text-dim); }
+  .dash-resource-row .metal { color: var(--metal); }
+  .dash-resource-row .crystal { color: var(--crystal); }
+  .dash-resource-row .food { color: var(--food); }
+  .dash-fleet-row { font-size: 12px; color: var(--text-dim); }
+  .dash-building-row { font-size: 12px; }
+  .dash-building-active { color: var(--ok); }
+  .dash-building-idle { color: var(--text-dim); }
+
   .fleet-card {
     background: var(--bg-panel);
     border: 1px solid var(--line);
@@ -1122,6 +1181,18 @@
     <button class="section-nav-item section-nav-top" id="section-nav-top-btn" type="button" title="回到頂端(切換玩家)" aria-label="回到頂端">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
     </button>
+    <!-- 總覽 gated the same account-wide way as 已知星球/艦隊動向/戰報
+         (hasIntelCenterAnywhere()) per the user's own request to tie it to
+         戰情中心 — see updateActionSectionVisibility(). Placed FIRST (both
+         here and as the first content section below, ahead of 建築格) so it
+         becomes the de-facto "landing screen" right after login: this is a
+         continuous-scroll single page, not separate routed tabs, so there is
+         no scroll-to-select step needed — whichever unlocked section is
+         physically first in the DOM is what's on screen without scrolling.
+         Before 戰情中心 exists anywhere, this pill (and its section) stay
+         hidden and 建築格 is simply the first visible thing, exactly as
+         before this feature existed. -->
+    <button class="section-nav-item hidden" data-nav-target="dashboard-section" type="button">總覽</button>
     <button class="section-nav-item" data-nav-target="plots-grid" type="button">建設</button>
     <button class="section-nav-item hidden" data-nav-target="fleet-roster-section" type="button">艦隊</button>
     <button class="section-nav-item hidden" data-nav-target="ship-production-section" type="button">生產排程</button>
@@ -1159,6 +1230,28 @@
       </div>
       <div class="fleet-top-grid" id="fleet-top-grid"></div>
     </div>
+  </div>
+
+  <!-- 總覽 (account-wide dashboard) — user request: "殖民星一多我覺得界面會變得
+       比較複雜,有沒有可能新增一個dashboard的功能可以總攬整個狀況,可以綁訂在戰情
+       中心的功能上". Read-only summary across EVERY owned planet at once —
+       resource rates, active building work, fleet/exploration whereabouts,
+       and incoming threats — so a multi-colony player doesn't have to
+       switch through each planet just to check on it. All data/render logic
+       lives in loadDashboardOverview()/renderDashboardOverview() (search for
+       them), called from the tail of pollUpdates() every poll cycle
+       alongside everything else. Visibility gated by hasIntelCenterAnywhere()
+       in updateActionSectionVisibility(), same account-wide 戰情中心 check
+       已知星球/艦隊動向/戰報 already use — per the user's own request to tie
+       this to 戰情中心 rather than gating it some other way. -->
+  <div id="dashboard-section" class="hidden">
+    <div class="section-label">
+      <span>總覽</span>
+    </div>
+    <div class="section-note">跨殖民地的總覽,不必切換星球逐一查看</div>
+    <div class="dashboard-grand-totals" id="dashboard-grand-totals"></div>
+    <div class="dashboard-alerts" id="dashboard-alerts"></div>
+    <div class="dashboard-planets" id="dashboard-planets"></div>
   </div>
 
   <!-- UX FIX (user feedback, mobile screenshot with the old layout circled in
@@ -1953,6 +2046,13 @@
     // intel. 移防 itself is account-internal and was deliberately NOT gated
     // on intel above, so the log that shows it shouldn't be either.
     const movementLogVisible = intelSectionsVisible || redeployVisible;
+    // 總覽 (account-wide dashboard) — per the user's own explicit request,
+    // tied to 戰情中心 the same account-wide way as 已知星球/艦隊動向/戰報
+    // above, but deliberately WITHOUT also requiring `known` (hasAnyKnownPlanet())
+    // like those three do: 總覽 summarizes the player's OWN empire, which has
+    // nothing to do with whether an enemy planet has been discovered yet.
+    const dashboardVisible = hasIntelCenterAnywhere();
+    document.getElementById('dashboard-section')?.classList.toggle('hidden', !dashboardVisible);
     document.getElementById('attack-section')?.classList.toggle('hidden', !attackVisible);
     document.getElementById('transport-section')?.classList.toggle('hidden', !attackVisible);
     document.getElementById('redeploy-section')?.classList.toggle('hidden', !redeployVisible);
@@ -3527,6 +3627,18 @@
       const targetHidden = target ? target.classList.contains('hidden') : true;
       btn.classList.toggle('hidden', targetHidden);
     });
+    // BUG FIX (found writing the 總覽 dashboard's own test, before shipping
+    // it): a section unlocking mid-poll-cycle (e.g. 總覽 the moment a 戰情
+    // 中心 first exists anywhere) never made the scrollspy re-evaluate
+    // "current" — updateCurrentSectionHighlight() previously only ran on
+    // scroll/resize/renderPlanetSwitcher(), none of which fire here. 總覽
+    // being placed FIRST made this newly visible: right after login the
+    // page sits scrolled to the very top, so the moment 總覽 unlocks it's
+    // genuinely the correct "current" pill, but without this call it stayed
+    // stuck on whatever was current before the unlock (建設) until the next
+    // scroll. Same class of bug as the frozen-rootMargin one fixed earlier
+    // this project — a visibility change nothing was watching.
+    updateCurrentSectionHighlight();
   }
 
   // 回到頂端 — plain `window.scrollTo(0)`, no `stickyTopHeight()` offset needed
@@ -3744,6 +3856,11 @@
     // npcPlanetRows (loadNpcData) freshly loaded this cycle before its
     // in-flight-raid check can be trusted.
     await maybeLaunchNpcRaids();
+    // 總覽 — genuinely last: purely a read-only summary of state everything
+    // above this line just finished reconciling, doesn't gate or get gated
+    // by anything else in this function. No-ops immediately if the section
+    // isn't unlocked/visible (see its own declaration comment).
+    await loadDashboardOverview();
   }
 
   // Gate offline catch-up per planet id (not a single global flag) so
@@ -7408,6 +7525,181 @@
 
   function onColonizeClick(explorationId, coord, btn) {
     openColonizeModal(coord, explorationId);
+  }
+
+  // ============================================================
+  // 總覽 (account-wide dashboard) — FEATURE per explicit user request:
+  // "殖民星一多我覺得界面會變得比較複雜,有沒有可能新增一個dashboard的功能可以總
+  // 攬整個狀況,可以綁訂在戰情中心的功能上". Gating lives in
+  // updateActionSectionVisibility() (hasIntelCenterAnywhere(), same
+  // account-wide check 已知星球/艦隊動向/戰報 already use); everything below is
+  // the data-fetching and rendering for the section itself.
+  //
+  // Deliberately its own set of small REST queries scoped to `in.(all my
+  // planet ids)`, rather than reusing ownBuildings/constructionRows/etc —
+  // those globals only ever hold the CURRENTLY VIEWED planet's data (see
+  // their own declaration comments up top), and the whole point of this
+  // section is showing every planet at once without switching. Runs once
+  // per poll cycle (called from the tail of pollUpdates()) so it stays
+  // roughly as fresh as everything else; loadDashboardOverview() itself
+  // bails out immediately whenever the section isn't even visible, so this
+  // costs nothing for players who haven't unlocked it yet.
+  // ============================================================
+  let dashboardOverviewLoading = false; // simple re-entrancy guard, same pattern as autoProduceQueueInProgress
+  async function loadDashboardOverview() {
+    if (!myPlanets.length) return;
+    const section = document.getElementById('dashboard-section');
+    if (!section || section.classList.contains('hidden')) return;
+    if (dashboardOverviewLoading) return;
+    dashboardOverviewLoading = true;
+    try {
+      const ids = myPlanets.map(p => p.id).join(',');
+      const [buildingRows, queueRows, exploreRows, attackRows, transportRows] = await Promise.all([
+        restRequest(`buildings?planet_id=in.(${ids})&select=planet_id,building_type,level`),
+        restRequest(`construction_queue?planet_id=in.(${ids})&status=neq.done&select=planet_id,building_type,target_level,complete_at&order=complete_at.asc`),
+        restRequest(`exploration_missions?planet_id=in.(${ids})&resolved=eq.false&select=planet_id,scout_ships_sent,fighter_ships_sent,transport_ships_sent`),
+        // defender_planet_id has been on every fleet_missions row since early
+        // in this project (see fleetAwayCount()'s own bug-fix comment for the
+        // matching attacker_planet_id backfill) — a legacy row somehow still
+        // missing it just won't match this `in.()` filter, the same
+        // acceptable gap every other planet_id-scoped query here already has.
+        restRequest(`fleet_missions?defender_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=defender_planet_id,attacker_name,arrival_time&order=arrival_time.asc`),
+        restRequest(`fleet_missions?defender_planet_id=in.(${ids})&mission_type=eq.transport&approval_status=eq.pending&select=defender_planet_id,attacker_name&order=launch_time.asc`),
+      ]);
+      renderDashboardOverview(buildingRows || [], queueRows || [], exploreRows || [], attackRows || [], transportRows || []);
+    } catch (err) {
+      console.error('Load dashboard overview error:', err);
+    } finally {
+      dashboardOverviewLoading = false;
+    }
+  }
+
+  // Same underlying per-level formula as miningRate() (shared, not
+  // duplicated) — just summed here against an arbitrary buildings array
+  // instead of always reading the global ownBuildings the way totalRate()
+  // does, since this needs to run once per PLANET, not just the active one.
+  function dashboardRateFor(buildings, resource) {
+    return buildings.reduce((sum, b) => {
+      const def = BUILDING_TYPES[b.building_type];
+      if (!def || !(def.resource === resource || (def.baseRates && def.baseRates[resource]))) return sum;
+      return sum + miningRate(b.building_type, b.level, resource);
+    }, 0);
+  }
+
+  function renderDashboardOverview(buildingRows, queueRows, exploreRows, attackRows, transportRows) {
+    const totalsEl = document.getElementById('dashboard-grand-totals');
+    const alertsEl = document.getElementById('dashboard-alerts');
+    const planetsEl = document.getElementById('dashboard-planets');
+    if (!totalsEl || !alertsEl || !planetsEl) return;
+
+    const buildingsByPlanet = {};
+    buildingRows.forEach(b => { (buildingsByPlanet[b.planet_id] || (buildingsByPlanet[b.planet_id] = [])).push(b); });
+    const queueByPlanet = {};
+    queueRows.forEach(c => { (queueByPlanet[c.planet_id] || (queueByPlanet[c.planet_id] = [])).push(c); });
+    const exploreByPlanet = {};
+    exploreRows.forEach(e => {
+      const bucket = exploreByPlanet[e.planet_id] || (exploreByPlanet[e.planet_id] = { ships: 0, count: 0 });
+      bucket.ships += (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0);
+      bucket.count++;
+    });
+
+    let grandMetalRate = 0, grandCrystalRate = 0, grandFoodRate = 0;
+    let grandMetalStock = 0, grandCrystalStock = 0, grandFoodStock = 0;
+    let grandFleetHome = 0, grandFleetExploring = 0;
+
+    const planetCardsHtml = myPlanets.map((p, i) => {
+      const buildings = buildingsByPlanet[p.id] || [];
+      const metalRate = dashboardRateFor(buildings, 'metal');
+      const crystalRate = dashboardRateFor(buildings, 'crystal');
+      const foodRate = dashboardRateFor(buildings, 'food');
+      grandMetalRate += metalRate; grandCrystalRate += crystalRate; grandFoodRate += foodRate;
+      grandMetalStock += Number(p.metal) || 0;
+      grandCrystalStock += Number(p.crystal) || 0;
+      grandFoodStock += Number(p.food) || 0;
+
+      const fleetHome = Object.keys(SHIP_TYPES).reduce((sum, t) => sum + (p[`${t}_count`] || 0), 0);
+      const exploring = exploreByPlanet[p.id];
+      const fleetExploring = exploring ? exploring.ships : 0;
+      grandFleetHome += fleetHome; grandFleetExploring += fleetExploring;
+
+      const queue = queueByPlanet[p.id] || [];
+      const front = queue[0]; // already ordered by complete_at.asc from the query
+      const buildingHtml = front
+        ? `<span class="dash-building-active">${(BUILDING_TYPES[front.building_type] || {}).name || front.building_type} ${front.target_level > 0 ? `→ LV${front.target_level}` : '拆除'}${queue.length > 1 ? `(還有 ${queue.length - 1} 項排隊中)` : ''}</span>`
+        : `<span class="dash-building-idle">目前無工程進行中</span>`;
+
+      const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
+      const name = p.nickname ? p.nickname : `座標 ${p.coord}`;
+
+      return `<div class="dash-planet-card">
+        <div class="dash-planet-head">
+          <span class="dash-planet-name">${homeMark}${name}</span>
+          <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
+        </div>
+        <div class="dash-resource-row">
+          <span class="metal">金屬 +${fmt(metalRate)}/秒</span>
+          <span class="crystal">晶體 +${fmt(crystalRate)}/秒</span>
+          <span class="food">糧食 +${fmt(foodRate)}/秒</span>
+        </div>
+        <div class="dash-fleet-row">艦隊 在家 ${fmt(fleetHome)}${fleetExploring > 0 ? ` · 探索中 ${fmt(fleetExploring)}` : ''}</div>
+        <div class="dash-building-row">${buildingHtml}</div>
+      </div>`;
+    }).join('');
+
+    totalsEl.innerHTML = `
+      <div class="res-card metal">
+        <div class="res-label">全帳號金屬</div>
+        <div class="res-value">${fmt(grandMetalStock)}</div>
+        <div class="res-rate">+${fmt(grandMetalRate)} / 秒</div>
+      </div>
+      <div class="res-card crystal">
+        <div class="res-label">全帳號晶體</div>
+        <div class="res-value">${fmt(grandCrystalStock)}</div>
+        <div class="res-rate">+${fmt(grandCrystalRate)} / 秒</div>
+      </div>
+      <div class="res-card food">
+        <div class="res-label">全帳號糧食</div>
+        <div class="res-value">${fmt(grandFoodStock)}</div>
+        <div class="res-rate">+${fmt(grandFoodRate)} / 秒</div>
+      </div>
+      <div class="res-card fleet">
+        <div class="res-label">全帳號艦隊</div>
+        <div class="res-value">${fmt(grandFleetHome + grandFleetExploring)}</div>
+        <div class="res-rate">在家 ${fmt(grandFleetHome)} · 探索中 ${fmt(grandFleetExploring)}</div>
+      </div>`;
+
+    const planetNameById = {};
+    myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
+
+    const attackAlertsHtml = attackRows.map(m => {
+      const remainSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const remainText = remainSec > 0 ? `${formatDuration(remainSec)}後抵達` : '即將抵達';
+      return `<div class="dash-alert">
+        <span class="dash-alert-text">⚠ ${m.attacker_name} 正在攻擊<span class="dash-alert-planet">(${planetNameById[m.defender_planet_id] || '未知星球'} · ${remainText})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${m.defender_planet_id}" type="button">前往</button>
+      </div>`;
+    }).join('');
+    const transportAlertsHtml = transportRows.map(m => `<div class="dash-alert transport">
+        <span class="dash-alert-text">${m.attacker_name} 請求運輸,待你回應<span class="dash-alert-planet">(${planetNameById[m.defender_planet_id] || '未知星球'})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${m.defender_planet_id}" type="button">前往</button>
+      </div>`).join('');
+    alertsEl.innerHTML = attackAlertsHtml + transportAlertsHtml;
+
+    planetsEl.innerHTML = planetCardsHtml;
+
+    // Event delegation on the two containers (rather than one listener per
+    // button) — same reasoning as every other renderXXX() in this file that
+    // rebuilds its container's innerHTML wholesale every refresh: cheaper
+    // to rebind twice per poll cycle than to leak one stale listener per
+    // button per planet per poll.
+    [alertsEl, planetsEl].forEach(container => {
+      container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
+          if (target) switchToPlanet(target);
+        });
+      });
+    });
   }
 
   // ============================================================
