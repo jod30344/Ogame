@@ -220,7 +220,12 @@
   button.upgrade:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Plots grid */
-  .plots-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  /* UX FIX: this note used to sit inside `.section-label`'s flex row,
+     wrapping awkwardly next to the title on narrow (mobile) widths — see the
+     HTML comment above the 建築格 section-label for the full story. As its
+     own full-width block below that row, it just wraps normally like any
+     other paragraph, with a little breathing room before the toolbar row. */
+  .plots-note { margin: -4px 0 10px; }
   .plot-sort-btn {
     display: inline-flex;
     align-items: center;
@@ -234,6 +239,7 @@
     border-radius: 6px;
     cursor: pointer;
     white-space: nowrap;
+    flex-shrink: 0;
   }
   .plot-sort-btn svg { width: 14px; height: 14px; }
   .plot-sort-btn:hover { border-color: var(--ok); color: var(--ok); }
@@ -1151,13 +1157,20 @@
     </div>
   </div>
 
-  <div class="section-label">
+  <!-- UX FIX (user feedback, mobile screenshot with the old layout circled in
+       red): the note below used to live INSIDE this flex `space-between` row,
+       fighting the title for width — on a phone-width screen the long note
+       wraps to 2 lines, and the sort button (previously a separate
+       `.plots-toolbar` block below this one) ended up stranded with an
+       awkward gap under it. Fixed by keeping only the title + sort button on
+       this row (both short, so no wrapping at any width) and moving the note
+       to its own full-width line below — it can wrap freely there without
+       fighting anything else for space. -->
+  <div class="section-label" style="align-items:center;">
     <span>建築格</span>
-    <span class="section-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊 · 拖曳格子右上角的把手可調整顯示順序</span>
-  </div>
-  <div class="plots-toolbar">
     <button class="plot-sort-btn" id="plot-sort-btn" type="button">依種類排序</button>
   </div>
+  <div class="section-note plots-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊 · 拖曳格子右上角的把手可調整顯示順序</div>
   <div class="plots-grid" id="plots-grid"></div>
 
   <div id="fleet-roster-section" class="hidden">
