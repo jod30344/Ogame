@@ -376,44 +376,6 @@
   .dash-alert.transport { background: rgba(240,168,80,0.08); border-color: var(--crystal); }
   .dash-alert-text { color: var(--text-main); }
   .dash-alert-text .dash-alert-planet { color: var(--text-dim); font-size: 12px; }
-  /* 在途任務 (in-transit missions) — the player's own OUTGOING activity
-     (exploration/colonization/redeploy/attack/transport), sorted soonest-
-     first across every colony at once. Capped height + scroll rather than
-     unbounded growth, since a large late-game account can easily have a
-     dozen-plus fleets in flight simultaneously. */
-  .dashboard-subheading { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 8px; }
-  .dashboard-transit-wrap { margin-bottom: 16px; }
-  .dashboard-transit { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
-  .dash-transit-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    background: var(--bg-panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-  .dash-transit-text { color: var(--text-main); }
-  .dash-transit-eta { color: var(--text-dim); margin-left: 6px; }
-  /* 閒置星球(可派遣探索) — same row shape as 在途任務 just above, but amber
-     (var(--crystal)) rather than neutral, since this is an opportunity
-     ("you could do this") rather than a status report ("this is happening"). */
-  .dashboard-idle-explore-wrap { margin-bottom: 16px; }
-  .dashboard-idle-explore { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
-  .dash-idle-explore-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    background: rgba(240,168,80,0.08);
-    border: 1px solid var(--crystal);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-  .dash-idle-explore-text { color: var(--crystal); }
   .dashboard-planets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
   .dash-planet-card {
     background: var(--bg-panel);
@@ -449,7 +411,7 @@
   .dash-resource-row .crystal { color: var(--crystal); }
   .dash-resource-row .food { color: var(--food); }
   .dash-fleet-row { font-size: 12px; color: var(--text-dim); }
-  .dash-building-row, .dash-ship-row { font-size: 12px; }
+  .dash-building-row, .dash-ship-row, .dash-mission-row { font-size: 12px; }
   .dash-queue-active { color: var(--ok); }
   .dash-queue-idle { color: var(--crystal); }
 
@@ -1311,32 +1273,33 @@
     <!-- OPTIMIZATION ROUND (user request after seeing 總覽 live: "我需要讓玩家
          看著這個儀表板就知道發生各種事") — 4 improvements, all picked via
          AskUserQuestion: (1) this badge strip, a zero-reading-required
-         "does anything need me right now" summary; (2) 在途任務 below,
-         surfacing the player's own OUTGOING activity (探索/殖民/移防/我方
-         發起的攻擊與運輸), which nothing on this page showed before — only
-         incoming alerts did; (3) countdown timers on each planet card's
-         building/ship-production rows (see renderDashboardOverview() —
-         search for dashboardEtaText()); (4) idle-colony highlighting (see
-         `.dash-planet-card.idle`). Hidden via `.hidden` (not `:empty`, since
-         it needs its own JS-computed condition) whenever nothing is due. -->
+         "does anything need me right now" summary; (2) the player's own
+         OUTGOING activity (探索/殖民/移防/我方發起的攻擊與運輸) per colony,
+         which nothing on this page showed before — only incoming alerts did;
+         (3) countdown timers on each planet card's building/ship-production
+         rows (see renderDashboardOverview() — search for dashboardEtaText());
+         (4) idle-colony highlighting (see `.dash-planet-card.idle`). Hidden
+         via `.hidden` (not `:empty`, since it needs its own JS-computed
+         condition) whenever nothing is due.
+
+         REVISION (user feedback, screenshot of a 6-colony account: "我看了看
+         覺得資訊的重複性太高,我覺得把在途任務跟閒置星球都整合到下面的星球卡片
+         中,讓玩家可以一眼就看清楚全貌"): outgoing missions and the "could
+         explore but isn't" nudge started out as their own standalone
+         sections (`#dashboard-transit-wrap` / `#dashboard-idle-explore-wrap`,
+         now removed) — but that meant a colony with several exploration
+         fleets out showed up as several near-identical ROWS in one section
+         AND its own name again in the planet-card grid below, once per
+         concern. Folded both into each planet's own card instead (see the
+         new mission rows in renderDashboardOverview() — search for
+         `missionGroupHtml()`) — one card is now the single place everything
+         about that colony lives, rather than the same colony name repeated
+         across three separate lists. The summary badges above stay: they
+         answer "do I need to look at anything at all" without scrolling the
+         grid, which per-card detail doesn't replace. -->
     <div class="dashboard-summary hidden" id="dashboard-summary"></div>
     <div class="dashboard-grand-totals" id="dashboard-grand-totals"></div>
     <div class="dashboard-alerts" id="dashboard-alerts"></div>
-    <div class="dashboard-transit-wrap hidden" id="dashboard-transit-wrap">
-      <div class="dashboard-subheading">在途任務</div>
-      <div class="dashboard-transit" id="dashboard-transit"></div>
-    </div>
-    <!-- OPTIMIZATION ROUND addition (user request after the grouping revision
-         above: "乾脆也把閒置的星球顯示出來,玩家可以決定要不要前往來派任探索")
-         — the mirror image of 在途任務: colonies that CAN explore (shipyard +
-         戰情中心 both built) but currently have no exploration mission out at
-         all, so the player can see the opportunity and decide whether to act
-         on it, rather than only ever seeing colonies that already ARE
-         exploring. See renderDashboardOverview() for the eligibility check. -->
-    <div class="dashboard-idle-explore-wrap hidden" id="dashboard-idle-explore-wrap">
-      <div class="dashboard-subheading">閒置星球(可派遣探索)</div>
-      <div class="dashboard-idle-explore" id="dashboard-idle-explore"></div>
-    </div>
     <div class="dashboard-planets" id="dashboard-planets"></div>
   </div>
 
@@ -7853,6 +7816,36 @@
     return remainSec > 0 ? `${formatDuration(remainSec)}後完成` : '即將完成';
   }
 
+  // REVISION (user feedback: "把在途任務跟閒置星球都整合到下面的星球卡片中,讓
+  // 玩家可以一眼就看清楚全貌") — groups an arbitrary set of mission rows by
+  // planet id into {count, ships, soonestArrival} buckets, and renders one
+  // to a compact mission-status line. Used once per category (探索/殖民/移防/
+  // 攻擊/運輸) inside the per-planet card loop below, replacing what used to
+  // be two standalone account-wide list sections.
+  const DASHBOARD_MISSION_LABELS = { explore: '探索', colonize: '殖民', redeploy: '移防', attack: '攻擊', transport: '運輸' };
+  const DASHBOARD_MISSION_VERB = { explore: '返回' }; // everything else defaults to 抵達
+  function groupMissionsByPlanet(rows, planetIdField, arrivalField, shipsFn) {
+    const map = {};
+    rows.forEach(r => {
+      const pid = r[planetIdField];
+      const g = map[pid] || (map[pid] = { count: 0, ships: 0, soonestArrival: r[arrivalField] });
+      g.count++;
+      if (shipsFn) g.ships += shipsFn(r);
+      if (new Date(r[arrivalField]) < new Date(g.soonestArrival)) g.soonestArrival = r[arrivalField];
+    });
+    return map;
+  }
+  function missionGroupHtml(category, group) {
+    if (!group) return '';
+    const label = DASHBOARD_MISSION_LABELS[category] || category;
+    const shipsSuffix = category === 'explore' ? `(合計 ${fmt(group.ships)} 艘)` : '';
+    const verb = DASHBOARD_MISSION_VERB[category] || '抵達';
+    const remainSec = (new Date(group.soonestArrival).getTime() - Date.now()) / 1000;
+    const soonestPrefix = group.count > 1 ? '最快 ' : '';
+    const etaText = remainSec > 0 ? `${soonestPrefix}${formatDuration(remainSec)}後${verb}` : `即將${verb}`;
+    return `<div class="dash-mission-row"><span class="dash-queue-active">${label}中 ×${group.count}${shipsSuffix} · ${etaText}</span></div>`;
+  }
+
   function renderDashboardOverview(data) {
     const {
       buildingRows, queueRows, shipQueueRows, exploreRows, attackRows, transportRows,
@@ -7861,10 +7854,8 @@
     const summaryEl = document.getElementById('dashboard-summary');
     const totalsEl = document.getElementById('dashboard-grand-totals');
     const alertsEl = document.getElementById('dashboard-alerts');
-    const transitWrapEl = document.getElementById('dashboard-transit-wrap');
-    const transitEl = document.getElementById('dashboard-transit');
     const planetsEl = document.getElementById('dashboard-planets');
-    if (!summaryEl || !totalsEl || !alertsEl || !transitWrapEl || !transitEl || !planetsEl) return;
+    if (!summaryEl || !totalsEl || !alertsEl || !planetsEl) return;
 
     const buildingsByPlanet = {};
     buildingRows.forEach(b => { (buildingsByPlanet[b.planet_id] || (buildingsByPlanet[b.planet_id] = [])).push(b); });
@@ -7872,12 +7863,16 @@
     queueRows.forEach(c => { (queueByPlanet[c.planet_id] || (queueByPlanet[c.planet_id] = [])).push(c); });
     const shipQueueByPlanet = {};
     shipQueueRows.forEach(s => { (shipQueueByPlanet[s.planet_id] || (shipQueueByPlanet[s.planet_id] = [])).push(s); });
-    const exploreByPlanet = {};
-    exploreRows.forEach(e => {
-      const bucket = exploreByPlanet[e.planet_id] || (exploreByPlanet[e.planet_id] = { ships: 0, count: 0 });
-      bucket.ships += (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0);
-      bucket.count++;
-    });
+    const exploreByPlanet = groupMissionsByPlanet(exploreRows, 'planet_id', 'arrival_time',
+      e => (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0));
+    // OPTIMIZATION ROUND additions (folded into cards this round — see the
+    // REVISION comment above `#dashboard-summary` in the HTML): one grouped
+    // lookup per outgoing mission category, keyed by the planet that
+    // launched it.
+    const colonizeByPlanet = groupMissionsByPlanet(colonizeRows, 'origin_planet_id', 'arrival_time');
+    const redeployByPlanet = groupMissionsByPlanet(redeployRows, 'origin_planet_id', 'arrival_time');
+    const outAttackByPlanet = groupMissionsByPlanet(outAttackRows, 'attacker_planet_id', 'arrival_time');
+    const outTransportByPlanet = groupMissionsByPlanet(outTransportRows, 'attacker_planet_id', 'arrival_time');
 
     const planetNameById = {};
     myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
@@ -7940,6 +7935,22 @@
         exploreIdlePlanets.push({ id: p.id, name });
       }
 
+      // REVISION: outgoing-mission rows, folded directly into each planet's
+      // own card (see the big comment above `#dashboard-summary` in the HTML
+      // for why these used to be two standalone sections). 探索 is the only
+      // category with an "idle opportunity" state — the others are
+      // situational player actions, not something every eligible colony
+      // should nudge you toward starting.
+      const exploreRowHtml = exploring
+        ? missionGroupHtml('explore', exploring)
+        : (hasShipyardHere && hasIntelCenterHere
+            ? `<div class="dash-mission-row"><span class="dash-queue-idle">⚠ 尚未派遣探索,可考慮派遣艦隊</span></div>`
+            : '');
+      const colonizeRowHtml = missionGroupHtml('colonize', colonizeByPlanet[p.id]);
+      const redeployRowHtml = missionGroupHtml('redeploy', redeployByPlanet[p.id]);
+      const outAttackRowHtml = missionGroupHtml('attack', outAttackByPlanet[p.id]);
+      const outTransportRowHtml = missionGroupHtml('transport', outTransportByPlanet[p.id]);
+
       return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}">
         <div class="dash-planet-head">
           <span class="dash-planet-name">${homeMark}${name}</span>
@@ -7953,6 +7964,11 @@
         <div class="dash-fleet-row">艦隊 在家 ${fmt(fleetHome)}${fleetExploring > 0 ? ` · 探索中 ${fmt(fleetExploring)}` : ''}</div>
         <div class="dash-building-row">${buildingHtml}</div>
         ${shipHtml}
+        ${exploreRowHtml}
+        ${colonizeRowHtml}
+        ${redeployRowHtml}
+        ${outAttackRowHtml}
+        ${outTransportRowHtml}
       </div>`;
     }).join('');
 
@@ -8004,84 +8020,6 @@
       </div>`).join('');
     alertsEl.innerHTML = attackAlertsHtml + transportAlertsHtml;
 
-    // OPTIMIZATION ROUND addition: 在途任務 — every OUTGOING mission across
-    // every colony, merged into one soonest-first list. Distinct from the
-    // alerts above (which are things happening TO the player); this is
-    // everything the player themself set in motion.
-    //
-    // REVISION (user feedback: "這個呈現方式太冗長" — a screenshot showed 5
-    // near-identical rows, 4 of them the SAME planet's exploration fleets one
-    // per line): raw per-mission rows don't scale — a busy multi-colony
-    // account can easily have several simultaneous missions of the same kind
-    // from the same planet, and listing every one separately is exactly the
-    // repetition the user was pointing at. Fixed by grouping items sharing
-    // the same (planet, mission category) into a single row — "露比四號 ·
-    // 探索中 ×4(合計 282 艘) · 最快 2 小時 8 分後返回" instead of 4 lines —
-    // picked over the alternatives (a denser per-row table; both combined) via
-    // AskUserQuestion. Distinguishing detail beyond count/soonest-ETA (which
-    // exact coordinate, which opponent) is intentionally dropped here — this
-    // is a summary, not a mission log; the per-planet pages still have the
-    // full detail for whichever colony the 前往 button sends you to.
-    const CATEGORY_LABELS = { explore: '探索', colonize: '殖民', redeploy: '移防', attack: '攻擊', transport: '運輸' };
-    const CATEGORY_VERB = { explore: '返回' }; // everything else defaults to 抵達 below
-    const transitItems = [];
-    exploreRows.forEach(e => {
-      if (!e.arrival_time) return;
-      const ships = (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0);
-      transitItems.push({ planetId: e.planet_id, category: 'explore', arrival: e.arrival_time, ships });
-    });
-    colonizeRows.forEach(m => {
-      transitItems.push({ planetId: m.origin_planet_id, category: 'colonize', arrival: m.arrival_time });
-    });
-    redeployRows.forEach(m => {
-      transitItems.push({ planetId: m.origin_planet_id, category: 'redeploy', arrival: m.arrival_time });
-    });
-    outAttackRows.forEach(m => {
-      transitItems.push({ planetId: m.attacker_planet_id, category: 'attack', arrival: m.arrival_time });
-    });
-    outTransportRows.forEach(m => {
-      transitItems.push({ planetId: m.attacker_planet_id, category: 'transport', arrival: m.arrival_time });
-    });
-
-    const transitGroups = {};
-    transitItems.forEach(item => {
-      const key = `${item.planetId}::${item.category}`;
-      const g = transitGroups[key] || (transitGroups[key] = {
-        planetId: item.planetId, category: item.category, count: 0, ships: 0, soonestArrival: item.arrival,
-      });
-      g.count++;
-      g.ships += item.ships || 0;
-      if (new Date(item.arrival) < new Date(g.soonestArrival)) g.soonestArrival = item.arrival;
-    });
-    const transitGroupList = Object.values(transitGroups).sort((a, b) => new Date(a.soonestArrival) - new Date(b.soonestArrival));
-
-    transitEl.innerHTML = transitGroupList.map(g => {
-      const label = CATEGORY_LABELS[g.category] || g.category;
-      const shipsSuffix = g.category === 'explore' ? `(合計 ${fmt(g.ships)} 艘)` : '';
-      const verb = CATEGORY_VERB[g.category] || '抵達';
-      const remainSec = (new Date(g.soonestArrival).getTime() - Date.now()) / 1000;
-      const soonestPrefix = g.count > 1 ? '最快 ' : '';
-      const etaText = remainSec > 0 ? `${soonestPrefix}${formatDuration(remainSec)}後${verb}` : `即將${verb}`;
-      return `<div class="dash-transit-item">
-        <span class="dash-transit-text">${planetNameById[g.planetId] || '未知星球'} · ${label}中 ×${g.count}${shipsSuffix}<span class="dash-transit-eta">(${etaText})</span></span>
-        <button class="dash-goto-btn" data-goto-planet="${g.planetId}" type="button">前往</button>
-      </div>`;
-    }).join('');
-    transitWrapEl.classList.toggle('hidden', transitGroupList.length === 0);
-
-    // OPTIMIZATION ROUND addition: 閒置星球(可派遣探索) — see exploreIdlePlanets'
-    // own comment above. Simple list, no ETA (there's nothing in flight to
-    // count down), just a nudge + a way straight to that colony's 探索 tab.
-    const idleExploreWrapEl = document.getElementById('dashboard-idle-explore-wrap');
-    const idleExploreEl = document.getElementById('dashboard-idle-explore');
-    if (idleExploreWrapEl && idleExploreEl) {
-      idleExploreEl.innerHTML = exploreIdlePlanets.map(p => `<div class="dash-idle-explore-item">
-        <span class="dash-idle-explore-text">${p.name} · 尚未派遣探索,可考慮派遣艦隊</span>
-        <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
-      </div>`).join('');
-      idleExploreWrapEl.classList.toggle('hidden', exploreIdlePlanets.length === 0);
-    }
-
     planetsEl.innerHTML = planetCardsHtml;
 
     // Event delegation on the containers (rather than one listener per
@@ -8089,7 +8027,7 @@
     // rebuilds its container's innerHTML wholesale every refresh: cheaper
     // to rebind twice per poll cycle than to leak one stale listener per
     // button per planet per poll.
-    [alertsEl, transitEl, idleExploreEl, planetsEl].filter(Boolean).forEach(container => {
+    [alertsEl, planetsEl].forEach(container => {
       container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
         btn.addEventListener('click', () => {
           const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
