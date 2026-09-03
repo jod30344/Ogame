@@ -7966,55 +7966,66 @@
     // every colony, merged into one soonest-first list. Distinct from the
     // alerts above (which are things happening TO the player); this is
     // everything the player themself set in motion.
+    //
+    // REVISION (user feedback: "這個呈現方式太冗長" — a screenshot showed 5
+    // near-identical rows, 4 of them the SAME planet's exploration fleets one
+    // per line): raw per-mission rows don't scale — a busy multi-colony
+    // account can easily have several simultaneous missions of the same kind
+    // from the same planet, and listing every one separately is exactly the
+    // repetition the user was pointing at. Fixed by grouping items sharing
+    // the same (planet, mission category) into a single row — "露比四號 ·
+    // 探索中 ×4(合計 282 艘) · 最快 2 小時 8 分後返回" instead of 4 lines —
+    // picked over the alternatives (a denser per-row table; both combined) via
+    // AskUserQuestion. Distinguishing detail beyond count/soonest-ETA (which
+    // exact coordinate, which opponent) is intentionally dropped here — this
+    // is a summary, not a mission log; the per-planet pages still have the
+    // full detail for whichever colony the 前往 button sends you to.
+    const CATEGORY_LABELS = { explore: '探索', colonize: '殖民', redeploy: '移防', attack: '攻擊', transport: '運輸' };
+    const CATEGORY_VERB = { explore: '返回' }; // everything else defaults to 抵達 below
     const transitItems = [];
     exploreRows.forEach(e => {
       if (!e.arrival_time) return;
       const ships = (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0);
-      transitItems.push({
-        planetId: e.planet_id,
-        arrival: e.arrival_time,
-        text: `${planetNameById[e.planet_id] || '未知星球'} 的探索艦隊(${fmt(ships)} 艘)在外執行任務`,
-      });
+      transitItems.push({ planetId: e.planet_id, category: 'explore', arrival: e.arrival_time, ships });
     });
     colonizeRows.forEach(m => {
-      transitItems.push({
-        planetId: m.origin_planet_id,
-        arrival: m.arrival_time,
-        text: `${planetNameById[m.origin_planet_id] || '未知星球'} 正在殖民 座標 ${m.target_coord}`,
-      });
+      transitItems.push({ planetId: m.origin_planet_id, category: 'colonize', arrival: m.arrival_time });
     });
     redeployRows.forEach(m => {
-      const destName = planetNameById[m.destination_planet_id] || `座標 ${m.destination_coord}`;
-      transitItems.push({
-        planetId: m.origin_planet_id,
-        arrival: m.arrival_time,
-        text: `${planetNameById[m.origin_planet_id] || '未知星球'} 艦隊正在移防至 ${destName}`,
-      });
+      transitItems.push({ planetId: m.origin_planet_id, category: 'redeploy', arrival: m.arrival_time });
     });
     outAttackRows.forEach(m => {
-      transitItems.push({
-        planetId: m.attacker_planet_id,
-        arrival: m.arrival_time,
-        text: `${planetNameById[m.attacker_planet_id] || '未知星球'} 艦隊正在攻擊 ${m.defender_name}`,
-      });
+      transitItems.push({ planetId: m.attacker_planet_id, category: 'attack', arrival: m.arrival_time });
     });
     outTransportRows.forEach(m => {
-      transitItems.push({
-        planetId: m.attacker_planet_id,
-        arrival: m.arrival_time,
-        text: `${planetNameById[m.attacker_planet_id] || '未知星球'} 運輸艦隊前往 ${m.defender_name}`,
-      });
+      transitItems.push({ planetId: m.attacker_planet_id, category: 'transport', arrival: m.arrival_time });
     });
-    transitItems.sort((a, b) => new Date(a.arrival) - new Date(b.arrival));
-    transitEl.innerHTML = transitItems.map(item => {
-      const remainSec = (new Date(item.arrival).getTime() - Date.now()) / 1000;
-      const etaText = remainSec > 0 ? `${formatDuration(remainSec)}後` : '即將';
+
+    const transitGroups = {};
+    transitItems.forEach(item => {
+      const key = `${item.planetId}::${item.category}`;
+      const g = transitGroups[key] || (transitGroups[key] = {
+        planetId: item.planetId, category: item.category, count: 0, ships: 0, soonestArrival: item.arrival,
+      });
+      g.count++;
+      g.ships += item.ships || 0;
+      if (new Date(item.arrival) < new Date(g.soonestArrival)) g.soonestArrival = item.arrival;
+    });
+    const transitGroupList = Object.values(transitGroups).sort((a, b) => new Date(a.soonestArrival) - new Date(b.soonestArrival));
+
+    transitEl.innerHTML = transitGroupList.map(g => {
+      const label = CATEGORY_LABELS[g.category] || g.category;
+      const shipsSuffix = g.category === 'explore' ? `(合計 ${fmt(g.ships)} 艘)` : '';
+      const verb = CATEGORY_VERB[g.category] || '抵達';
+      const remainSec = (new Date(g.soonestArrival).getTime() - Date.now()) / 1000;
+      const soonestPrefix = g.count > 1 ? '最快 ' : '';
+      const etaText = remainSec > 0 ? `${soonestPrefix}${formatDuration(remainSec)}後${verb}` : `即將${verb}`;
       return `<div class="dash-transit-item">
-        <span class="dash-transit-text">${item.text}<span class="dash-transit-eta">(${etaText})</span></span>
-        <button class="dash-goto-btn" data-goto-planet="${item.planetId}" type="button">前往</button>
+        <span class="dash-transit-text">${planetNameById[g.planetId] || '未知星球'} · ${label}中 ×${g.count}${shipsSuffix}<span class="dash-transit-eta">(${etaText})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${g.planetId}" type="button">前往</button>
       </div>`;
     }).join('');
-    transitWrapEl.classList.toggle('hidden', transitItems.length === 0);
+    transitWrapEl.classList.toggle('hidden', transitGroupList.length === 0);
 
     planetsEl.innerHTML = planetCardsHtml;
 
