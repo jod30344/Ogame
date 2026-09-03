@@ -397,6 +397,23 @@
   }
   .dash-transit-text { color: var(--text-main); }
   .dash-transit-eta { color: var(--text-dim); margin-left: 6px; }
+  /* 閒置星球(可派遣探索) — same row shape as 在途任務 just above, but amber
+     (var(--crystal)) rather than neutral, since this is an opportunity
+     ("you could do this") rather than a status report ("this is happening"). */
+  .dashboard-idle-explore-wrap { margin-bottom: 16px; }
+  .dashboard-idle-explore { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .dash-idle-explore-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(240,168,80,0.08);
+    border: 1px solid var(--crystal);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .dash-idle-explore-text { color: var(--crystal); }
   .dashboard-planets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
   .dash-planet-card {
     background: var(--bg-panel);
@@ -1308,6 +1325,17 @@
     <div class="dashboard-transit-wrap hidden" id="dashboard-transit-wrap">
       <div class="dashboard-subheading">在途任務</div>
       <div class="dashboard-transit" id="dashboard-transit"></div>
+    </div>
+    <!-- OPTIMIZATION ROUND addition (user request after the grouping revision
+         above: "乾脆也把閒置的星球顯示出來,玩家可以決定要不要前往來派任探索")
+         — the mirror image of 在途任務: colonies that CAN explore (shipyard +
+         戰情中心 both built) but currently have no exploration mission out at
+         all, so the player can see the opportunity and decide whether to act
+         on it, rather than only ever seeing colonies that already ARE
+         exploring. See renderDashboardOverview() for the eligibility check. -->
+    <div class="dashboard-idle-explore-wrap hidden" id="dashboard-idle-explore-wrap">
+      <div class="dashboard-subheading">閒置星球(可派遣探索)</div>
+      <div class="dashboard-idle-explore" id="dashboard-idle-explore"></div>
     </div>
     <div class="dashboard-planets" id="dashboard-planets"></div>
   </div>
@@ -7858,6 +7886,14 @@
     let grandMetalStock = 0, grandCrystalStock = 0, grandFoodStock = 0;
     let grandFleetHome = 0, grandFleetExploring = 0;
     let idleCount = 0; // OPTIMIZATION ROUND: feeds both the idle badge and the per-card outline below
+    // OPTIMIZATION ROUND addition (user request: "乾脆也把閒置的星球顯示出來,
+    // 玩家可以決定要不要前往來派任探索") — colonies that COULD explore
+    // (shipyard + 戰情中心 both built, same prerequisite as exploreVisible in
+    // updateActionSectionVisibility()) but have no exploration mission out
+    // right now. Separate from idleCount above — this is specifically about
+    // exploration, not construction/ship-production idleness, and a colony
+    // can be idle on one axis without being idle on the other.
+    const exploreIdlePlanets = [];
 
     const planetCardsHtml = myPlanets.map((p, i) => {
       const buildings = buildingsByPlanet[p.id] || [];
@@ -7898,6 +7934,11 @@
 
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
       const name = p.nickname ? p.nickname : `座標 ${p.coord}`;
+
+      const hasIntelCenterHere = buildings.some(b => b.building_type === 'intel_center');
+      if (hasShipyardHere && hasIntelCenterHere && !exploring) {
+        exploreIdlePlanets.push({ id: p.id, name });
+      }
 
       return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}">
         <div class="dash-planet-head">
@@ -7945,6 +7986,7 @@
     if (attackRows.length > 0) badges.push(`<span class="dash-badge attack">⚠ ${attackRows.length} 個攻擊警報</span>`);
     if (transportRows.length > 0) badges.push(`<span class="dash-badge transport">⚠ ${transportRows.length} 個運輸待審核</span>`);
     if (idleCount > 0) badges.push(`<span class="dash-badge idle">⚠ ${idleCount} 個殖民地閒置</span>`);
+    if (exploreIdlePlanets.length > 0) badges.push(`<span class="dash-badge idle">⚠ ${exploreIdlePlanets.length} 個殖民地可派遣探索</span>`);
     summaryEl.innerHTML = badges.join('');
     summaryEl.classList.toggle('hidden', badges.length === 0);
 
@@ -8027,6 +8069,19 @@
     }).join('');
     transitWrapEl.classList.toggle('hidden', transitGroupList.length === 0);
 
+    // OPTIMIZATION ROUND addition: 閒置星球(可派遣探索) — see exploreIdlePlanets'
+    // own comment above. Simple list, no ETA (there's nothing in flight to
+    // count down), just a nudge + a way straight to that colony's 探索 tab.
+    const idleExploreWrapEl = document.getElementById('dashboard-idle-explore-wrap');
+    const idleExploreEl = document.getElementById('dashboard-idle-explore');
+    if (idleExploreWrapEl && idleExploreEl) {
+      idleExploreEl.innerHTML = exploreIdlePlanets.map(p => `<div class="dash-idle-explore-item">
+        <span class="dash-idle-explore-text">${p.name} · 尚未派遣探索,可考慮派遣艦隊</span>
+        <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
+      </div>`).join('');
+      idleExploreWrapEl.classList.toggle('hidden', exploreIdlePlanets.length === 0);
+    }
+
     planetsEl.innerHTML = planetCardsHtml;
 
     // Event delegation on the containers (rather than one listener per
@@ -8034,7 +8089,7 @@
     // rebuilds its container's innerHTML wholesale every refresh: cheaper
     // to rebind twice per poll cycle than to leak one stale listener per
     // button per planet per poll.
-    [alertsEl, transitEl, planetsEl].forEach(container => {
+    [alertsEl, transitEl, idleExploreEl, planetsEl].filter(Boolean).forEach(container => {
       container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
         btn.addEventListener('click', () => {
           const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
