@@ -2,7 +2,7 @@
   "name": "星塵方舟：起源",
   "short_name": "星塵方舟",
   "description": "多人線上策略遊戲——建設殖民地、拓展艦隊、探索未知星域。",
-  "start_url": "./planetmultiplayer.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#0b1220",
