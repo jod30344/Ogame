@@ -1254,21 +1254,39 @@
     <div class="dashboard-planets" id="dashboard-planets"></div>
   </div>
 
-  <!-- UX FIX (user feedback, mobile screenshot with the old layout circled in
-       red): the note below used to live INSIDE this flex `space-between` row,
-       fighting the title for width — on a phone-width screen the long note
-       wraps to 2 lines, and the sort button (previously a separate
-       `.plots-toolbar` block below this one) ended up stranded with an
-       awkward gap under it. Fixed by keeping only the title + sort button on
-       this row (both short, so no wrapping at any width) and moving the note
-       to its own full-width line below — it can wrap freely there without
-       fighting anything else for space. -->
-  <div class="section-label" style="align-items:center;">
-    <span>建築格</span>
-    <button class="plot-sort-btn" id="plot-sort-btn" type="button">依種類排序</button>
-  </div>
-  <div class="section-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊 · 拖曳格子右上角的把手可調整顯示順序</div>
-  <div class="plots-grid" id="plots-grid"></div>
+  <!-- REVISION (user feedback after viewing 總覽 live on their own large,
+       6-colony account): "我認為這樣資訊太亂了,我覺得總覽要另外分一頁出來,然後
+       這一頁要取消置頂的金屬、晶體、糧食、艦隊的欄位" — 總覽 being merely another
+       section in the same continuous scroll wasn't enough: the per-planet
+       `.planet-switcher`/`#resources-bar` sticky bars still showed ABOVE it
+       (they're not part of any one section — see their own placement right
+       before dashboard-section — so nothing before this hid them), which is
+       exactly the clutter being complained about, since 總覽 is account-wide
+       and has nothing to do with whichever single planet those bars describe.
+       Fixed by wrapping every PER-PLANET section (建築格 through 戰報) in this
+       one `#planet-sections` container, so `enterDashboardView()`/
+       `exitDashboardView()` (search for them) can hide/show the whole thing
+       as a single unit — together with the two sticky bars above it, toggled
+       directly by those same two functions — without having to touch each
+       section's own individual hidden-class gating underneath. -->
+  <div id="planet-sections">
+    <div id="plots-section">
+      <!-- UX FIX (user feedback, mobile screenshot with the old layout circled in
+           red): the note below used to live INSIDE this flex `space-between` row,
+           fighting the title for width — on a phone-width screen the long note
+           wraps to 2 lines, and the sort button (previously a separate
+           `.plots-toolbar` block below this one) ended up stranded with an
+           awkward gap under it. Fixed by keeping only the title + sort button on
+           this row (both short, so no wrapping at any width) and moving the note
+           to its own full-width line below — it can wrap freely there without
+           fighting anything else for space. -->
+      <div class="section-label" style="align-items:center;">
+        <span>建築格</span>
+        <button class="plot-sort-btn" id="plot-sort-btn" type="button">依種類排序</button>
+      </div>
+      <div class="section-note">全星球同時只能有一項工程在進行(含拆除),其餘會排隊 · 拖曳格子右上角的把手可調整顯示順序</div>
+      <div class="plots-grid" id="plots-grid"></div>
+    </div>
 
   <div id="fleet-roster-section" class="hidden">
     <div class="section-label" style="margin-top:30px;">
@@ -1440,6 +1458,8 @@
     <div class="battle-log" id="battle-log">
       <div class="battle-empty">尚無戰鬥紀錄</div>
     </div>
+  </div>
+
   </div>
 
 </div>
@@ -2051,8 +2071,32 @@
     // above, but deliberately WITHOUT also requiring `known` (hasAnyKnownPlanet())
     // like those three do: 總覽 summarizes the player's OWN empire, which has
     // nothing to do with whether an enemy planet has been discovered yet.
+    //
+    // REVISION (user feedback after seeing 總覽 live on their own large,
+    // multi-colony account: "總覽要另外分一頁出來"): 總覽 is no longer just
+    // another section unlocked/hidden in place — it's a genuinely separate
+    // "page" (see the big comment above `#planet-sections` in the HTML), so
+    // `#dashboard-section`'s own hidden class now tracks whether it's the
+    // CURRENTLY ACTIVE view (dashboardViewActive, toggled only by
+    // enterDashboardView()/exitDashboardView()), not merely whether it's
+    // unlocked. The pill's own visibility needs the UNLOCK state instead
+    // (so it stays clickable from every other page) — that's `dashboardUnlocked`,
+    // read directly by updateSectionNavVisibility() rather than mirrored from
+    // this section's hidden class the way every other pill's is.
     const dashboardVisible = hasIntelCenterAnywhere();
-    document.getElementById('dashboard-section')?.classList.toggle('hidden', !dashboardVisible);
+    dashboardUnlocked = dashboardVisible;
+    // Don't strand the player on a page whose own pill just vanished (e.g. an
+    // intel center demolished from every colony while 總覽 happens to be the
+    // active view) — fall back out to the normal per-planet view.
+    if (!dashboardVisible && dashboardViewActive) exitDashboardView();
+    // First visibility check after login: land directly on 總覽 if it's
+    // already unlocked, per the user's own explicit placement request
+    // ("登入後的第一個畫面") — now implemented by actually switching into the
+    // dashboard page rather than simply placing it first in a shared scroll.
+    if (justLoggedIn) {
+      justLoggedIn = false;
+      if (dashboardVisible) enterDashboardView();
+    }
     document.getElementById('attack-section')?.classList.toggle('hidden', !attackVisible);
     document.getElementById('transport-section')?.classList.toggle('hidden', !attackVisible);
     document.getElementById('redeploy-section')?.classList.toggle('hidden', !redeployVisible);
@@ -2526,6 +2570,21 @@
   // ============================================================
   let planet = null;
   let myPlanets = [];           // every planet row owned by the logged-in player, sorted by created_at (home/oldest first — see migration.sql section 22; NOT id, which is a random uuid in this project and was never actually chronological)
+  // 總覽 dashboard-view mode (REVISION per user feedback: "總覽要另外分一頁出來"
+  // — see the big comment above `#planet-sections` in the HTML for the full
+  // story). true while the account-wide dashboard is the only thing on
+  // screen; see enterDashboardView()/exitDashboardView() just below
+  // updateCurrentSectionHighlight().
+  let dashboardViewActive = false;
+  // Whether 總覽 is unlocked at all (hasIntelCenterAnywhere()), independent of
+  // dashboardViewActive — drives the 總覽 PILL's own visibility (it must stay
+  // clickable from every other page), while dashboardViewActive alone drives
+  // `#dashboard-section`'s own hidden class. Set in updateActionSectionVisibility().
+  let dashboardUnlocked = false;
+  // One-shot: true from startGame() until the first post-login
+  // updateActionSectionVisibility() call, which consumes it to auto-enter 總覽
+  // if it's already unlocked ("登入後的第一個畫面" — see that function).
+  let justLoggedIn = false;
   let ownBuildings = [];       // rows from `buildings` for this planet
   let constructionRows = [];   // rows from `construction_queue`, status != done
   let shipQueueRows = [];      // rows from `ship_queue`, status != done
@@ -3209,6 +3268,10 @@
   function startGame(name) {
     loginScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
+    // Consumed by the first post-login updateActionSectionVisibility() call
+    // (inside the pollUpdates() below) to auto-enter 總覽 if unlocked — see
+    // that function's own comment.
+    justLoggedIn = true;
     document.getElementById('planet-title').textContent = name + ' 的殖民地';
     renderPlanetNameLabel();
     document.getElementById('planet-rename-form').classList.add('hidden');
@@ -3620,6 +3683,19 @@
   // ============================================================
   function updateSectionNavVisibility() {
     document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
+      // REVISION: 總覽's pill visibility is its own unlock state
+      // (dashboardUnlocked, set in updateActionSectionVisibility()), NOT a
+      // mirror of `#dashboard-section`'s own hidden class like every other
+      // pill below — since the "separate page" revision, that section's
+      // hidden class instead tracks whether it's the CURRENTLY ACTIVE view
+      // (dashboardViewActive). Mirroring it directly here would hide the
+      // pill itself the instant the player left the dashboard page, exactly
+      // backwards from what a pill whose whole job is "get back to 總覽 from
+      // anywhere" needs to do.
+      if (btn.dataset.navTarget === 'dashboard-section') {
+        btn.classList.toggle('hidden', !dashboardUnlocked);
+        return;
+      }
       const target = document.getElementById(btn.dataset.navTarget);
       // `plots-grid` has no hidden-toggling gate of its own (always visible
       // once logged in) — treat a target with no visibility gate as always
@@ -3641,10 +3717,54 @@
     updateCurrentSectionHighlight();
   }
 
+  // ============================================================
+  // 總覽 dashboard-view mode — REVISION (user feedback after seeing 總覽 live
+  // on their own large, 6-colony account): "我認為這樣資訊太亂了,我覺得總覽要
+  // 另外分一頁出來,然後這一頁要取消置頂的金屬、晶體、糧食、艦隊的欄位". Rather
+  // than 總覽 merely being another section placed first in the same
+  // continuous scroll (V1 — the per-planet `.planet-switcher`/
+  // `#resources-bar` sticky bars still showed above it, since they're not
+  // part of any one section), entering "dashboard view" now hides those two
+  // bars AND the entire `#planet-sections` wrapper (建築格 through 戰報) as one
+  // unit, leaving `#dashboard-section` as the only thing on screen. No
+  // individual section's own hidden-class gating underneath `#planet-sections`
+  // needs to change for this — exiting just reveals whichever of them
+  // updateActionSectionVisibility() already had unlocked.
+  // ============================================================
+  function enterDashboardView() {
+    dashboardViewActive = true;
+    document.getElementById('dashboard-section')?.classList.remove('hidden');
+    document.getElementById('planet-switcher')?.classList.add('hidden');
+    document.getElementById('resources-bar')?.classList.add('hidden');
+    document.getElementById('planet-sections')?.classList.add('hidden');
+    // Short-circuits inside updateCurrentSectionHighlight() while
+    // dashboardViewActive is true, so this is safe to call for its other
+    // effect (re-measuring --section-nav-height etc. now that two of the
+    // sticky bars just disappeared).
+    updateStickyOffsets();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  function exitDashboardView() {
+    if (!dashboardViewActive) return;
+    dashboardViewActive = false;
+    document.getElementById('dashboard-section')?.classList.add('hidden');
+    document.getElementById('resources-bar')?.classList.remove('hidden');
+    document.getElementById('planet-sections')?.classList.remove('hidden');
+    // `.planet-switcher` has its own ≤1-planet gating — re-render it rather
+    // than blindly unhiding, since a single-planet account must never show
+    // it (see renderPlanetSwitcher()'s own early-return for that case).
+    renderPlanetSwitcher();
+    updateStickyOffsets();
+  }
+
   // 回到頂端 — plain `window.scrollTo(0)`, no `stickyTopHeight()` offset needed
   // (unlike the section jump-links below): the very top of the page is above
   // BOTH sticky bars, not behind them, so there's nothing to subtract for.
+  // REVISION: also exits 總覽's dashboard view first, if active, since
+  // "top of the page" now means the normal per-planet view, not the
+  // dashboard page.
   document.getElementById('section-nav-top-btn')?.addEventListener('click', () => {
+    exitDashboardView();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
@@ -3689,6 +3809,17 @@
 
   document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
     btn.addEventListener('click', () => {
+      // REVISION: 總覽 is now a separate "page" (see enterDashboardView()) —
+      // clicking its pill enters that page instead of scrolling to an anchor.
+      if (btn.dataset.navTarget === 'dashboard-section') {
+        enterDashboardView();
+        return;
+      }
+      // Every OTHER pill needs to leave the dashboard page first, if it's
+      // active, before its normal scroll-to-anchor behavior makes sense
+      // again (the target section was hidden inside `#planet-sections`
+      // while dashboard view was active).
+      exitDashboardView();
       const target = document.getElementById(btn.dataset.navTarget);
       if (!target) return;
       const y = target.getBoundingClientRect().top + window.scrollY - stickyTopHeight() - 10;
@@ -3743,8 +3874,22 @@
   // the classic scrollspy algorithm, with no viewport-height-relative
   // percentage to get wrong.
   function updateCurrentSectionHighlight() {
+    // BUG FIX (anticipated while implementing the "總覽 as a separate page"
+    // revision, not yet user-reported): while dashboard view is active,
+    // every OTHER section lives inside the now-`hidden` `#planet-sections`
+    // wrapper, and a hidden element's getBoundingClientRect() always comes
+    // back all-zero — the scan below would read every one of their tops as
+    // "<= threshold" and walk all the way to the LAST unlocked pill (e.g.
+    // 戰報), not 總覽. Short-circuit instead: 總覽 is unconditionally
+    // "current" whenever it's the active view, since it's the only thing on
+    // screen.
+    if (dashboardViewActive) {
+      document.querySelectorAll('.section-nav-item.current').forEach(el => el.classList.remove('current'));
+      document.querySelector('.section-nav-item[data-nav-target="dashboard-section"]')?.classList.add('current');
+      return;
+    }
     const items = Array.from(document.querySelectorAll('.section-nav-item[data-nav-target]'))
-      .filter(btn => !btn.classList.contains('hidden'));
+      .filter(btn => !btn.classList.contains('hidden') && btn.dataset.navTarget !== 'dashboard-section');
     if (items.length === 0) return;
     let current;
     // Scrolled to (or effectively at) the bottom of the page: the deepest
@@ -7696,7 +7841,14 @@
       container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
         btn.addEventListener('click', () => {
           const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
-          if (target) switchToPlanet(target);
+          if (target) {
+            // REVISION: 總覽 is now a separate page — a 前往 click needs to
+            // leave it (revealing `#planet-sections` again) as well as
+            // switching the active planet, or the player would land on the
+            // right planet with the whole per-planet view still hidden.
+            exitDashboardView();
+            switchToPlanet(target);
+          }
         });
       });
     });
