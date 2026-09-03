@@ -344,6 +344,22 @@
     margin-bottom: 16px;
   }
   .dashboard-grand-totals .res-card { margin: 0; }
+  /* Pending-action badge strip — see the HTML comment above #dashboard-summary. */
+  .dashboard-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .dash-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid var(--line);
+    background: var(--bg-panel);
+    color: var(--text-main);
+  }
+  .dash-badge.attack { border-color: var(--warn); color: var(--warn); background: rgba(255,107,107,0.08); }
+  .dash-badge.transport, .dash-badge.idle { border-color: var(--crystal); color: var(--crystal); background: rgba(240,168,80,0.08); }
   .dashboard-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
   .dashboard-alerts:empty { display: none; margin-bottom: 0; }
   .dash-alert {
@@ -360,6 +376,27 @@
   .dash-alert.transport { background: rgba(240,168,80,0.08); border-color: var(--crystal); }
   .dash-alert-text { color: var(--text-main); }
   .dash-alert-text .dash-alert-planet { color: var(--text-dim); font-size: 12px; }
+  /* 在途任務 (in-transit missions) — the player's own OUTGOING activity
+     (exploration/colonization/redeploy/attack/transport), sorted soonest-
+     first across every colony at once. Capped height + scroll rather than
+     unbounded growth, since a large late-game account can easily have a
+     dozen-plus fleets in flight simultaneously. */
+  .dashboard-subheading { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 8px; }
+  .dashboard-transit-wrap { margin-bottom: 16px; }
+  .dashboard-transit { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .dash-transit-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .dash-transit-text { color: var(--text-main); }
+  .dash-transit-eta { color: var(--text-dim); margin-left: 6px; }
   .dashboard-planets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
   .dash-planet-card {
     background: var(--bg-panel);
@@ -370,6 +407,11 @@
     flex-direction: column;
     gap: 10px;
   }
+  /* Idle-colony highlight — a colony with nothing queued (no construction,
+     and no ship production on any shipyard it has) is the single most
+     actionable thing on this whole dashboard, so it gets the whole card
+     outlined rather than relying on someone reading every line of text. */
+  .dash-planet-card.idle { border-color: var(--crystal); }
   .dash-planet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .dash-planet-name { font-weight: 600; }
   .dash-goto-btn {
@@ -390,9 +432,9 @@
   .dash-resource-row .crystal { color: var(--crystal); }
   .dash-resource-row .food { color: var(--food); }
   .dash-fleet-row { font-size: 12px; color: var(--text-dim); }
-  .dash-building-row { font-size: 12px; }
-  .dash-building-active { color: var(--ok); }
-  .dash-building-idle { color: var(--text-dim); }
+  .dash-building-row, .dash-ship-row { font-size: 12px; }
+  .dash-queue-active { color: var(--ok); }
+  .dash-queue-idle { color: var(--crystal); }
 
   .fleet-card {
     background: var(--bg-panel);
@@ -1249,8 +1291,24 @@
       <span>總覽</span>
     </div>
     <div class="section-note">跨殖民地的總覽,不必切換星球逐一查看</div>
+    <!-- OPTIMIZATION ROUND (user request after seeing 總覽 live: "我需要讓玩家
+         看著這個儀表板就知道發生各種事") — 4 improvements, all picked via
+         AskUserQuestion: (1) this badge strip, a zero-reading-required
+         "does anything need me right now" summary; (2) 在途任務 below,
+         surfacing the player's own OUTGOING activity (探索/殖民/移防/我方
+         發起的攻擊與運輸), which nothing on this page showed before — only
+         incoming alerts did; (3) countdown timers on each planet card's
+         building/ship-production rows (see renderDashboardOverview() —
+         search for dashboardEtaText()); (4) idle-colony highlighting (see
+         `.dash-planet-card.idle`). Hidden via `.hidden` (not `:empty`, since
+         it needs its own JS-computed condition) whenever nothing is due. -->
+    <div class="dashboard-summary hidden" id="dashboard-summary"></div>
     <div class="dashboard-grand-totals" id="dashboard-grand-totals"></div>
     <div class="dashboard-alerts" id="dashboard-alerts"></div>
+    <div class="dashboard-transit-wrap hidden" id="dashboard-transit-wrap">
+      <div class="dashboard-subheading">在途任務</div>
+      <div class="dashboard-transit" id="dashboard-transit"></div>
+    </div>
     <div class="dashboard-planets" id="dashboard-planets"></div>
   </div>
 
@@ -7699,10 +7757,20 @@
     dashboardOverviewLoading = true;
     try {
       const ids = myPlanets.map(p => p.id).join(',');
-      const [buildingRows, queueRows, exploreRows, attackRows, transportRows] = await Promise.all([
+      const [
+        buildingRows, queueRows, shipQueueRows, exploreRows, attackRows, transportRows,
+        colonizeRows, redeployRows, outAttackRows, outTransportRows,
+      ] = await Promise.all([
         restRequest(`buildings?planet_id=in.(${ids})&select=planet_id,building_type,level`),
         restRequest(`construction_queue?planet_id=in.(${ids})&status=neq.done&select=planet_id,building_type,target_level,complete_at&order=complete_at.asc`),
-        restRequest(`exploration_missions?planet_id=in.(${ids})&resolved=eq.false&select=planet_id,scout_ships_sent,fighter_ships_sent,transport_ships_sent`),
+        // OPTIMIZATION ROUND addition: ship-production countdown/idle-detection
+        // needs its own queue read — the dashboard never fetched ship_queue at
+        // all before this (only construction_queue), so a shipyard cranking
+        // out ships showed no sign of it anywhere on this page.
+        restRequest(`ship_queue?planet_id=in.(${ids})&status=neq.done&select=planet_id,ship_type,count,complete_at&order=complete_at.asc`),
+        // arrival_time added this round (used to power 在途任務 below) — the
+        // original query only pulled ship counts for the grand-totals sum.
+        restRequest(`exploration_missions?planet_id=in.(${ids})&resolved=eq.false&select=planet_id,scout_ships_sent,fighter_ships_sent,transport_ships_sent,arrival_time&order=arrival_time.asc`),
         // defender_planet_id has been on every fleet_missions row since early
         // in this project (see fleetAwayCount()'s own bug-fix comment for the
         // matching attacker_planet_id backfill) — a legacy row somehow still
@@ -7710,8 +7778,25 @@
         // acceptable gap every other planet_id-scoped query here already has.
         restRequest(`fleet_missions?defender_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=defender_planet_id,attacker_name,arrival_time&order=arrival_time.asc`),
         restRequest(`fleet_missions?defender_planet_id=in.(${ids})&mission_type=eq.transport&approval_status=eq.pending&select=defender_planet_id,attacker_name&order=launch_time.asc`),
+        // OPTIMIZATION ROUND additions (在途任務): every one of these is the
+        // player's own OUTGOING activity — nothing on this page showed any of
+        // it before, only incoming alerts (the two queries just above) did.
+        restRequest(`colonization_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,target_coord,arrival_time&order=arrival_time.asc`),
+        restRequest(`redeploy_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,destination_planet_id,destination_coord,arrival_time&order=arrival_time.asc`),
+        // approval_status=neq.pending: an un-approved outgoing transport
+        // request hasn't actually launched yet (see pendingOutgoingTransports'
+        // own comment) — it belongs in "awaiting a decision", not "in transit",
+        // and this dashboard doesn't surface outgoing pending requests at all
+        // (only INCOMING ones, above, need the player's own response).
+        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=attacker_planet_id,defender_name,arrival_time&order=arrival_time.asc`),
+        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.transport&approval_status=neq.pending&select=attacker_planet_id,defender_name,arrival_time&order=arrival_time.asc`),
       ]);
-      renderDashboardOverview(buildingRows || [], queueRows || [], exploreRows || [], attackRows || [], transportRows || []);
+      renderDashboardOverview({
+        buildingRows: buildingRows || [], queueRows: queueRows || [], shipQueueRows: shipQueueRows || [],
+        exploreRows: exploreRows || [], attackRows: attackRows || [], transportRows: transportRows || [],
+        colonizeRows: colonizeRows || [], redeployRows: redeployRows || [],
+        outAttackRows: outAttackRows || [], outTransportRows: outTransportRows || [],
+      });
     } catch (err) {
       console.error('Load dashboard overview error:', err);
     } finally {
@@ -7731,16 +7816,34 @@
     }, 0);
   }
 
-  function renderDashboardOverview(buildingRows, queueRows, exploreRows, attackRows, transportRows) {
+  // OPTIMIZATION ROUND addition: shared countdown-text helper for both the
+  // construction and ship-production rows below — same "X 後完成" phrasing
+  // formatDuration() already gives the attack-alert countdown, just reused
+  // here instead of duplicated.
+  function dashboardEtaText(completeAt) {
+    const remainSec = (new Date(completeAt).getTime() - Date.now()) / 1000;
+    return remainSec > 0 ? `${formatDuration(remainSec)}後完成` : '即將完成';
+  }
+
+  function renderDashboardOverview(data) {
+    const {
+      buildingRows, queueRows, shipQueueRows, exploreRows, attackRows, transportRows,
+      colonizeRows, redeployRows, outAttackRows, outTransportRows,
+    } = data;
+    const summaryEl = document.getElementById('dashboard-summary');
     const totalsEl = document.getElementById('dashboard-grand-totals');
     const alertsEl = document.getElementById('dashboard-alerts');
+    const transitWrapEl = document.getElementById('dashboard-transit-wrap');
+    const transitEl = document.getElementById('dashboard-transit');
     const planetsEl = document.getElementById('dashboard-planets');
-    if (!totalsEl || !alertsEl || !planetsEl) return;
+    if (!summaryEl || !totalsEl || !alertsEl || !transitWrapEl || !transitEl || !planetsEl) return;
 
     const buildingsByPlanet = {};
     buildingRows.forEach(b => { (buildingsByPlanet[b.planet_id] || (buildingsByPlanet[b.planet_id] = [])).push(b); });
     const queueByPlanet = {};
     queueRows.forEach(c => { (queueByPlanet[c.planet_id] || (queueByPlanet[c.planet_id] = [])).push(c); });
+    const shipQueueByPlanet = {};
+    shipQueueRows.forEach(s => { (shipQueueByPlanet[s.planet_id] || (shipQueueByPlanet[s.planet_id] = [])).push(s); });
     const exploreByPlanet = {};
     exploreRows.forEach(e => {
       const bucket = exploreByPlanet[e.planet_id] || (exploreByPlanet[e.planet_id] = { ships: 0, count: 0 });
@@ -7748,9 +7851,13 @@
       bucket.count++;
     });
 
+    const planetNameById = {};
+    myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
+
     let grandMetalRate = 0, grandCrystalRate = 0, grandFoodRate = 0;
     let grandMetalStock = 0, grandCrystalStock = 0, grandFoodStock = 0;
     let grandFleetHome = 0, grandFleetExploring = 0;
+    let idleCount = 0; // OPTIMIZATION ROUND: feeds both the idle badge and the per-card outline below
 
     const planetCardsHtml = myPlanets.map((p, i) => {
       const buildings = buildingsByPlanet[p.id] || [];
@@ -7770,13 +7877,29 @@
       const queue = queueByPlanet[p.id] || [];
       const front = queue[0]; // already ordered by complete_at.asc from the query
       const buildingHtml = front
-        ? `<span class="dash-building-active">${(BUILDING_TYPES[front.building_type] || {}).name || front.building_type} ${front.target_level > 0 ? `→ LV${front.target_level}` : '拆除'}${queue.length > 1 ? `(還有 ${queue.length - 1} 項排隊中)` : ''}</span>`
-        : `<span class="dash-building-idle">目前無工程進行中</span>`;
+        ? `<span class="dash-queue-active">${(BUILDING_TYPES[front.building_type] || {}).name || front.building_type} ${front.target_level > 0 ? `→ LV${front.target_level}` : '拆除'}${queue.length > 1 ? `(還有 ${queue.length - 1} 項排隊中)` : ''} · ${dashboardEtaText(front.complete_at)}</span>`
+        : `<span class="dash-queue-idle">⚠ 建築閒置,可安排新工程</span>`;
+
+      // OPTIMIZATION ROUND addition: ship-production row, mirroring the
+      // building row above — only shown for a colony that actually HAS a
+      // shipyard (a colony with none isn't "idle" on this axis, it simply
+      // doesn't have this capability yet, so no warning is shown for it).
+      const hasShipyardHere = buildings.some(b => b.building_type === 'shipyard');
+      const shipQueue = shipQueueByPlanet[p.id] || [];
+      const shipFront = shipQueue[0];
+      const shipHtml = hasShipyardHere
+        ? `<div class="dash-ship-row">${shipFront
+            ? `<span class="dash-queue-active">${(SHIP_TYPES[shipFront.ship_type] || {}).name || shipFront.ship_type} ×${fmt(shipFront.count)} · ${dashboardEtaText(shipFront.complete_at)}</span>`
+            : `<span class="dash-queue-idle">⚠ 造船廠閒置,可安排新生產</span>`}</div>`
+        : '';
+
+      const cardIdle = !front && (!hasShipyardHere || !shipFront);
+      if (cardIdle) idleCount++;
 
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
       const name = p.nickname ? p.nickname : `座標 ${p.coord}`;
 
-      return `<div class="dash-planet-card">
+      return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}">
         <div class="dash-planet-head">
           <span class="dash-planet-name">${homeMark}${name}</span>
           <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
@@ -7788,6 +7911,7 @@
         </div>
         <div class="dash-fleet-row">艦隊 在家 ${fmt(fleetHome)}${fleetExploring > 0 ? ` · 探索中 ${fmt(fleetExploring)}` : ''}</div>
         <div class="dash-building-row">${buildingHtml}</div>
+        ${shipHtml}
       </div>`;
     }).join('');
 
@@ -7813,8 +7937,16 @@
         <div class="res-rate">在家 ${fmt(grandFleetHome)} · 探索中 ${fmt(grandFleetExploring)}</div>
       </div>`;
 
-    const planetNameById = {};
-    myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
+    // OPTIMIZATION ROUND addition: pending-action badge strip — a
+    // zero-reading-required "does anything need me right now" summary above
+    // everything else, so a player with many colonies doesn't have to scan
+    // every card just to find out nothing's wrong.
+    const badges = [];
+    if (attackRows.length > 0) badges.push(`<span class="dash-badge attack">⚠ ${attackRows.length} 個攻擊警報</span>`);
+    if (transportRows.length > 0) badges.push(`<span class="dash-badge transport">⚠ ${transportRows.length} 個運輸待審核</span>`);
+    if (idleCount > 0) badges.push(`<span class="dash-badge idle">⚠ ${idleCount} 個殖民地閒置</span>`);
+    summaryEl.innerHTML = badges.join('');
+    summaryEl.classList.toggle('hidden', badges.length === 0);
 
     const attackAlertsHtml = attackRows.map(m => {
       const remainSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
@@ -7830,14 +7962,68 @@
       </div>`).join('');
     alertsEl.innerHTML = attackAlertsHtml + transportAlertsHtml;
 
+    // OPTIMIZATION ROUND addition: 在途任務 — every OUTGOING mission across
+    // every colony, merged into one soonest-first list. Distinct from the
+    // alerts above (which are things happening TO the player); this is
+    // everything the player themself set in motion.
+    const transitItems = [];
+    exploreRows.forEach(e => {
+      if (!e.arrival_time) return;
+      const ships = (e.scout_ships_sent || 0) + (e.fighter_ships_sent || 0) + (e.transport_ships_sent || 0);
+      transitItems.push({
+        planetId: e.planet_id,
+        arrival: e.arrival_time,
+        text: `${planetNameById[e.planet_id] || '未知星球'} 的探索艦隊(${fmt(ships)} 艘)在外執行任務`,
+      });
+    });
+    colonizeRows.forEach(m => {
+      transitItems.push({
+        planetId: m.origin_planet_id,
+        arrival: m.arrival_time,
+        text: `${planetNameById[m.origin_planet_id] || '未知星球'} 正在殖民 座標 ${m.target_coord}`,
+      });
+    });
+    redeployRows.forEach(m => {
+      const destName = planetNameById[m.destination_planet_id] || `座標 ${m.destination_coord}`;
+      transitItems.push({
+        planetId: m.origin_planet_id,
+        arrival: m.arrival_time,
+        text: `${planetNameById[m.origin_planet_id] || '未知星球'} 艦隊正在移防至 ${destName}`,
+      });
+    });
+    outAttackRows.forEach(m => {
+      transitItems.push({
+        planetId: m.attacker_planet_id,
+        arrival: m.arrival_time,
+        text: `${planetNameById[m.attacker_planet_id] || '未知星球'} 艦隊正在攻擊 ${m.defender_name}`,
+      });
+    });
+    outTransportRows.forEach(m => {
+      transitItems.push({
+        planetId: m.attacker_planet_id,
+        arrival: m.arrival_time,
+        text: `${planetNameById[m.attacker_planet_id] || '未知星球'} 運輸艦隊前往 ${m.defender_name}`,
+      });
+    });
+    transitItems.sort((a, b) => new Date(a.arrival) - new Date(b.arrival));
+    transitEl.innerHTML = transitItems.map(item => {
+      const remainSec = (new Date(item.arrival).getTime() - Date.now()) / 1000;
+      const etaText = remainSec > 0 ? `${formatDuration(remainSec)}後` : '即將';
+      return `<div class="dash-transit-item">
+        <span class="dash-transit-text">${item.text}<span class="dash-transit-eta">(${etaText})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${item.planetId}" type="button">前往</button>
+      </div>`;
+    }).join('');
+    transitWrapEl.classList.toggle('hidden', transitItems.length === 0);
+
     planetsEl.innerHTML = planetCardsHtml;
 
-    // Event delegation on the two containers (rather than one listener per
+    // Event delegation on the containers (rather than one listener per
     // button) — same reasoning as every other renderXXX() in this file that
     // rebuilds its container's innerHTML wholesale every refresh: cheaper
     // to rebind twice per poll cycle than to leak one stale listener per
     // button per planet per poll.
-    [alertsEl, planetsEl].forEach(container => {
+    [alertsEl, transitEl, planetsEl].forEach(container => {
       container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
         btn.addEventListener('click', () => {
           const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
