@@ -3550,6 +3550,10 @@
   function updateStickyOffsets() {
     document.documentElement.style.setProperty('--section-nav-height', document.getElementById('section-nav')?.offsetHeight + 'px' || '0px');
     document.documentElement.style.setProperty('--planet-switcher-height', document.getElementById('planet-switcher')?.offsetHeight + 'px' || '0px');
+    // stickyTopHeight() just may have changed (a bar toggled visible/hidden,
+    // or its own content changed height) — refresh which pill is "current"
+    // against the new measurement too (see updateCurrentSectionHighlight()).
+    updateCurrentSectionHighlight();
   }
   updateStickyOffsets();
   window.addEventListener('resize', updateStickyOffsets);
@@ -3560,30 +3564,88 @@
       if (!target) return;
       const y = target.getBoundingClientRect().top + window.scrollY - stickyTopHeight() - 10;
       window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+      // Mark this pill "current" immediately, rather than waiting for the
+      // smooth-scroll animation's own 'scroll' events to arrive at it via
+      // updateCurrentSectionHighlight() below — a deliberate click should
+      // give instant feedback, not lag behind the animation.
+      document.querySelectorAll('.section-nav-item.current').forEach(el => el.classList.remove('current'));
+      btn.classList.add('current');
     });
   });
 
   // Lightweight "scrollspy": highlights whichever section is currently
-  // scrolled into view by giving its pill a `.current` style, purely a visual
-  // aid for orientation — no functional dependency on this observer existing
+  // scrolled into view by giving its pill a `.current` style, purely a
+  // visual aid for orientation — no functional dependency on this existing
   // (clicking a pill always works regardless of whether `.current` is
-  // accurately tracking scroll position). rootMargin's negative top matches
-  // BOTH permanently-pinned bars' combined height (see stickyTopHeight()) so
-  // a section isn't considered "current" while it's still hidden behind them.
-  const sectionNavObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      const btn = document.querySelector(`.section-nav-item[data-nav-target="${entry.target.id}"]`);
-      if (!btn) return;
-      if (entry.isIntersecting) {
-        document.querySelectorAll('.section-nav-item.current').forEach(el => el.classList.remove('current'));
-        btn.classList.add('current');
+  // accurately tracking scroll position).
+  //
+  // BUG FIX #1 (reported by the user via a screen recording: clicking a nav
+  // pill correctly scrolled the page, but the highlighted "current" pill
+  // stayed stuck on the topmost one instead of following the scroll): this
+  // used to be an IntersectionObserver built exactly ONCE, as top-level
+  // script code that runs at page-parse time — BEFORE login, while
+  // #game-screen (and everything inside it: #section-nav,
+  // #planet-switcher, #resources-bar) still had `display:none` from the
+  // `hidden` class, collapsing stickyTopHeight() to 0 at that moment.
+  // IntersectionObserver's rootMargin can't be edited after construction,
+  // so that near-zero margin was permanently baked in — every section's top
+  // crossed that near-zero threshold almost immediately on scroll, well
+  // before it actually cleared the real sticky bars, so in practice the
+  // FIRST section (建設) satisfied the check right away and nothing after
+  // it ever displaced it.
+  //
+  // BUG FIX #2 (found while writing a Playwright test for fix #1, before
+  // ever shipping it — same root cause category, so fixed together, no
+  // separate user report): even rebuilt with a correctly-measured
+  // rootMargin, the old design's `-70%` bottom cutoff implicitly assumed a
+  // short sticky-bar stack relative to the viewport. With the full 3-bar
+  // stack this file now has (nav + planet switcher + resources — the last
+  // one alone commonly 200px+ once the fleet-total summary card unlocks) on
+  // an ordinary laptop-height browser window, `-${stickyTopHeight()}px …
+  // -70% 0px` shrinks the observer's effective "visible" band to zero or
+  // negative — no section could ever satisfy it, so the highlight would
+  // still never move on a great many real screens even with the rootMargin
+  // correctly recomputed.
+  //
+  // Replaced entirely with a plain scroll-position scan instead of
+  // IntersectionObserver: walk the visible pills in the same top-to-bottom
+  // order their sections appear on the page, and "current" is the LAST one
+  // whose section has scrolled up to (or past) just below the sticky bars —
+  // the classic scrollspy algorithm, with no viewport-height-relative
+  // percentage to get wrong.
+  function updateCurrentSectionHighlight() {
+    const items = Array.from(document.querySelectorAll('.section-nav-item[data-nav-target]'))
+      .filter(btn => !btn.classList.contains('hidden'));
+    if (items.length === 0) return;
+    let current;
+    // Scrolled to (or effectively at) the bottom of the page: the deepest
+    // unlocked section is as "current" as it will ever get, even if there
+    // isn't enough trailing content below it for its own top to actually
+    // reach the sticky-bar threshold below — e.g. a newer account that's
+    // only unlocked a couple of short sections so far, where the whole page
+    // is barely taller than one screen. Without this, that last section
+    // could be permanently unreachable through no fault of the player's.
+    const doc = document.documentElement;
+    const atBottom = window.innerHeight + window.scrollY >= doc.scrollHeight - 2;
+    if (atBottom) {
+      current = items[items.length - 1];
+    } else {
+      const threshold = stickyTopHeight() + 20;
+      current = items[0];
+      for (const btn of items) {
+        const target = document.getElementById(btn.dataset.navTarget);
+        if (!target) continue;
+        if (target.getBoundingClientRect().top <= threshold) {
+          current = btn;
+        } else {
+          break; // pills are declared in the same order as their sections
+        }
       }
-    });
-  }, { rootMargin: `-${stickyTopHeight() + 10}px 0px -70% 0px`, threshold: 0 });
-  document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
-    const target = document.getElementById(btn.dataset.navTarget);
-    if (target) sectionNavObserver.observe(target);
-  });
+    }
+    document.querySelectorAll('.section-nav-item.current').forEach(el => el.classList.remove('current'));
+    current.classList.add('current');
+  }
+  window.addEventListener('scroll', updateCurrentSectionHighlight, { passive: true });
 
   async function pollUpdates() {
     await loadBuildings();               // needed first: rates depend on it
