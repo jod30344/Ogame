@@ -6945,20 +6945,32 @@
   renderExploreShipLabels();
 
   // "智能編隊" (smart formation): a quick-fill helper, one step short of
-  // manually typing counts — sets each ship type's exploration input to 1/3 of
-  // however many of that type are currently at home (rounded down), so a
-  // player can commit a modest, balanced slice of their fleet in one click
-  // rather than eyeballing numbers. Purely a convenience fill of the same
-  // inputs `onExploreClick()` already reads — it doesn't launch anything
-  // itself, and a player can still edit any field afterward before dispatching.
-  const SMART_FORMATION_FRACTION = 1 / 3;
+  // manually typing counts — sets each ship type's exploration input to
+  // 1 / (剩餘派遣名額), i.e. however many of that type are currently at
+  // home divided by however many MORE exploration missions can still be
+  // dispatched right now (same quantity shown in the "剩餘派遣名額:X / Y"
+  // note — see renderExplorationLog()). That sizes the fill to exactly one
+  // of the remaining launches, so a player can click 智能編隊 then
+  // immediately click 派遣探索 without tripping a "超過持有量" or cap
+  // error, and repeating the click+dispatch cycle evenly spends the whole
+  // home fleet across exactly as many launches as are currently available
+  // — instead of a fixed guess (previously a flat 1/3) that could overfill
+  // relative to the account's actual homestead-gated cap or remaining
+  // slots. Purely a convenience fill of the same inputs `onExploreClick()`
+  // already reads — it doesn't launch anything itself, and a player can
+  // still edit any field afterward before dispatching. The button is
+  // disabled whenever 剩餘派遣名額 is 0 (see renderExplorationLog()), so
+  // remainingSlots here is normally >= 1; Math.max(1, ...) is just a
+  // defensive floor against a stale/zero read so this never divides by 0.
   document.getElementById('explore-smart-formation-btn').addEventListener('click', () => {
     if (!planet) return;
+    const explorationCap = explorationCapForHomesteadLevel(homesteadLevel());
+    const remainingSlots = Math.max(1, explorationCap - explorationRows.length);
     Object.keys(SHIP_TYPES).forEach(type => {
       const input = document.getElementById(`explore-${type}-count`);
       if (!input) return;
       const home = planet[`${type}_count`] || 0;
-      input.value = Math.floor(home * SMART_FORMATION_FRACTION);
+      input.value = Math.floor(home / remainingSlots);
     });
     updateExploreFoodEstimate();
   });
@@ -7110,7 +7122,17 @@
       if (on) input.value = planet[`auto_explore_${type}_count`] || 0;
     });
     const smartBtn = document.getElementById('explore-smart-formation-btn');
-    if (smartBtn) smartBtn.disabled = on;
+    // Fold in the at-cap check too (not just `on`), matching how
+    // renderExplorationLog() computes it — this function also runs on
+    // colony switch (see the BUG FIX note above), which can land after
+    // renderExplorationLog() and would otherwise briefly re-enable
+    // 智能編隊 on a colony that's actually at its exploration cap, until
+    // the next loadExplorationData() poll corrects it.
+    if (smartBtn) {
+      const explorationCap = !!planet ? explorationCapForHomesteadLevel(homesteadLevel()) : 0;
+      const atCap = !!planet && explorationRows.length >= explorationCap;
+      smartBtn.disabled = on || atCap;
+    }
     // Lock the tier picker to the locked tier too, and disable every button
     // so it can't be changed out from under the running automation —
     // re-toggling `active` here (rather than re-calling
@@ -7770,6 +7792,7 @@
 
     const slotsNote = document.getElementById('explore-slots-note');
     const launchBtn = document.getElementById('explore-launch-btn');
+    const smartBtn = document.getElementById('explore-smart-formation-btn');
     if (slotsNote) {
       const explorationCap = explorationCapForHomesteadLevel(homesteadLevel());
       const atCap = explorationRows.length >= explorationCap;
@@ -7784,6 +7807,11 @@
       // trusting whatever renderAutoExploreControl() set last, or a poll
       // landing after it would silently re-enable manual launch mid-lock.
       if (launchBtn) launchBtn.disabled = atCap || isAutoExploring();
+      // 智能編隊's fill is now 1/(剩餘派遣名額) — with 0 slots left there's
+      // nothing left to size a fill for (and 派遣探索 is disabled above
+      // anyway), so disable it the same way and for the same
+      // fold-in-isAutoExploring() reason as launchBtn just above.
+      if (smartBtn) smartBtn.disabled = atCap || isAutoExploring();
     }
 
     progressContainer.innerHTML = explorationRows.map(m => {
