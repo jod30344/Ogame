@@ -391,9 +391,13 @@
      actionable thing on this whole dashboard, so it gets the whole card
      outlined rather than relying on someone reading every line of text. */
   .dash-planet-card.idle { border-color: var(--crystal); }
-  .dash-planet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* align-items changed from center to flex-start (was fine for one button,
+     now two stack in .dash-card-actions and would otherwise vertically
+     center against just the single-line planet name). */
+  .dash-planet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .dash-planet-name { font-weight: 600; }
-  .dash-goto-btn {
+  .dash-card-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .dash-goto-btn, .dash-transport-btn {
     background: none;
     border: 1px solid var(--line);
     color: var(--text-dim);
@@ -406,6 +410,43 @@
     flex-shrink: 0;
   }
   .dash-goto-btn:hover { border-color: var(--ok); color: var(--ok); }
+  /* 運輸 button — per user request, doubles as a drag handle (see the
+     pointerdown/move/up trio near renderDashboardOverview()'s own event
+     delegation). touch-action:none stops touchscreens from scrolling the
+     page instead of starting a drag once a pointer moves past the threshold. */
+  .dash-transport-btn { cursor: grab; touch-action: none; }
+  .dash-transport-btn:hover { border-color: var(--metal); color: var(--metal); }
+  .dash-transport-btn.dragging { cursor: grabbing; border-color: var(--metal); color: var(--metal); }
+  /* The origin card dims slightly while its own 運輸 button is mid-drag, and
+     any OTHER card currently under the cursor (a valid drop target) gets a
+     green glow — same --ok green used for "在家" elsewhere on this dashboard,
+     so a hovered card reads as "yes, drop here" at a glance. */
+  .dash-planet-card.drag-source-active { opacity: 0.55; }
+  .dash-planet-card.drag-target-valid { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(79, 209, 165, 0.35); }
+  /* Cursor-following arrow shown while dragging a 運輸 button — see
+     startDashboardDrag()/onDashboardDragMove(). Fixed + pointer-events:none so
+     it never intercepts the drag's own pointer events. */
+  #dashboard-drag-overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 500; }
+  #dashboard-drag-line { stroke: var(--ok); stroke-width: 3; stroke-dasharray: 7 5; }
+  #dashboard-drag-arrowhead path { fill: var(--ok); }
+  /* New modal reuses the same .ship-input-group/.ship-input-label/.ship-input
+     markup the page-level 移防 form and the colonize-modal already use, but
+     (like colonize-modal) isn't nested inside `.attack-card` — scoping the
+     same input chrome `.attack-card input, .attack-card select` normally
+     provides directly to this modal's own id instead of duplicating an
+     `.attack-card` panel-within-a-panel just to inherit it. */
+  #dash-redeploy-modal .modal-box { max-width: 420px; }
+  #dash-redeploy-modal input, #dash-redeploy-modal select {
+    background: var(--bg-deep);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text-main);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    outline: none;
+  }
+  #dash-redeploy-modal .redeploy-form-grid { margin-top: 4px; }
   .dash-resource-row { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--text-dim); }
   .dash-resource-row .metal { color: var(--metal); }
   .dash-resource-row .crystal { color: var(--crystal); }
@@ -1177,6 +1218,69 @@
     </div>
   </div>
 </div>
+
+<!-- 總覽拖曳移防 — per user request ("拖曳移防與資源(艦隊、物資)的方式...會出現
+     問你要移防多少與運輸多少物資的畫面,確定後會排入任務裡"). Dragging a planet
+     card's own 運輸 button onto ANOTHER card opens this modal instead of
+     leaving 總覽 — see startDashboardDrag()/finishDashboardDrag() and
+     openDashboardRedeployModal(). Same 7-field shape (mothership/scout/
+     fighter/transport + metal/crystal/food) as the page-level 移防 form,
+     reusing .redeploy-form-grid/.ship-input-group for identical layout, just
+     scoped to `dbrd-*` ids so nothing collides with that form's own. -->
+<div class="modal-overlay hidden" id="dash-redeploy-modal">
+  <div class="modal-box">
+    <div class="modal-title" id="dash-redeploy-title">移防</div>
+    <div class="modal-body">
+      <div class="redeploy-form-grid">
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-mothership">殖民母艦</label>
+          <input type="number" class="ship-input" id="dbrd-mothership" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-scout">偵察機</label>
+          <input type="number" class="ship-input" id="dbrd-scout" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-fighter">戰鬥機</label>
+          <input type="number" class="ship-input" id="dbrd-fighter" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-transport">運輸艦</label>
+          <input type="number" class="ship-input" id="dbrd-transport" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-metal">攜帶金屬</label>
+          <input type="number" class="ship-input" id="dbrd-metal" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-crystal">攜帶晶體</label>
+          <input type="number" class="ship-input" id="dbrd-crystal" min="0" value="0">
+        </div>
+        <div class="ship-input-group">
+          <label class="ship-input-label" for="dbrd-food">攜帶糧食</label>
+          <input type="number" class="ship-input" id="dbrd-food" min="0" value="0">
+        </div>
+      </div>
+      <div class="colonize-cargo-note" id="dbrd-cargo-note"></div>
+      <div class="attack-msg" id="dbrd-msg"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="dash-redeploy-cancel" type="button">取消</button>
+      <button class="modal-confirm" id="dash-redeploy-confirm" type="button">派遣移防</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cursor-following arrow shown only while actively dragging a 運輸 button
+     (see startDashboardDrag()). Hidden/inert the rest of the time. -->
+<svg id="dashboard-drag-overlay" class="hidden">
+  <defs>
+    <marker id="dashboard-drag-arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z"></path>
+    </marker>
+  </defs>
+  <line id="dashboard-drag-line" x1="0" y1="0" x2="0" y2="0" marker-end="url(#dashboard-drag-arrowhead)"></line>
+</svg>
 
 <div class="login-screen" id="login-screen">
   <div class="eyebrow">星塵方舟：起源</div>
@@ -8041,10 +8145,28 @@
       if (fleetExploring > 0) fleetBreakdownParts.push(`<span class="dash-fleet-exploring">探索 ${fmt(fleetExploring)}</span>`);
       const fleetBreakdownHtml = fleetBreakdownParts.join(' · ');
 
-      return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}">
+      return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}" data-planet-id="${p.id}">
         <div class="dash-planet-head">
           <span class="dash-planet-name">${homeMark}${name}</span>
-          <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
+          <div class="dash-card-actions">
+            <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
+            <!-- Per user request ("再前往按鈕下面多一個「運輸」的按鈕...也可以用
+                 拖曳的方式到其他星球...會出現問你要移防多少與運輸多少物資的畫面")
+                 — a plain click jumps to this planet and opens the 移防 tab
+                 directly (see the pointerup handler below); dragging this
+                 button onto ANOTHER card opens an in-page 移防 quantity modal
+                 with origin/destination already set. The mission this
+                 actually creates is 移防 (fleet+cargo between the player's OWN
+                 colonies, no approval needed) — labeled 運輸 here since that's
+                 the verb the user used, not to be confused with the existing
+                 「運輸」 nav pill (a different mechanic: a resource request to
+                 ANOTHER player's known planet, which needs their approval and
+                 isn't reachable from this own-colony card grid at all).
+                 Only rendered with 2+ owned planets — same gate the 移防
+                 pill itself uses (redeployVisible), since with only one
+                 planet there is no other card to redeploy to or from. -->
+            ${myPlanets.length > 1 ? `<button class="dash-transport-btn" data-transport-planet="${p.id}" type="button">運輸</button>` : ''}
+          </div>
         </div>
         <div class="dash-resource-row">
           <span class="metal">金屬 +${fmt(metalRate)}/秒</span>
@@ -8142,6 +8264,421 @@
         });
       });
     });
+
+    // FEATURE: 拖曳移防 — per user request. pointerdown starts tracking; the
+    // actual click-vs-drag decision happens in onDashboardTransportPointerUp()
+    // based on whether the pointer moved past DASHBOARD_DRAG_THRESHOLD_PX
+    // before release, not from a separate 'click' listener (which would
+    // double-fire alongside the drag's own pointerup). See that function and
+    // openDashboardRedeployModal() just below renderDashboardOverview().
+    planetsEl.querySelectorAll('button[data-transport-planet]').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        const originPlanet = myPlanets.find(p => String(p.id) === String(btn.dataset.transportPlanet));
+        if (originPlanet) startDashboardTransportDrag(e, originPlanet, btn);
+      });
+    });
+  }
+
+  // ============================================================
+  // 拖曳移防 (drag-to-redeploy from 總覽) — per user request: "我想弄一個拖曳移
+  // 防與資源(艦隊、物資)的方式,再前往按鈕下面多一個「運輸」的按鈕,除了點即可以
+  // 跳往該星球的運輸畫面,也可以用拖曳的方式到其他星球(可能會有箭頭跟隨滑鼠),會
+  // 出現問你要移防多少與運輸多少物資的畫面,確定後會排入任務裡。" Confirmed via
+  // two follow-up AskUserQuestion rounds: (1) the quantity screen pops up
+  // in-place on 總覽 itself rather than navigating away, and (2) a plain
+  // click (no drag) jumps to that planet and opens the 移防 tab directly.
+  //
+  // The mission this actually creates is 移防 (redeploy fleet+cargo between
+  // the player's OWN colonies, no approval needed — see the existing
+  // #redeploy-section) — the button is labeled 運輸 because that's the verb
+  // the user used, not because this reuses the separate, pre-existing
+  // "運輸" mechanic (a resource REQUEST to another player's known planet,
+  // gated on their approval — see #transport-section). That mechanic isn't
+  // reachable from here at all: 總覽's card grid only ever lists the
+  // player's OWN planets, so a drag between two of its cards can only ever
+  // mean "move MY OWN fleet/cargo between MY OWN colonies," which is exactly
+  // what 移防 already is.
+  // ============================================================
+  const DASHBOARD_DRAG_THRESHOLD_PX = 6;
+  let dashboardDragState = null;       // set while a 運輸-button pointer is down; see startDashboardTransportDrag()
+  let dashboardRedeployContext = null; // { originPlanet, destPlanet } while the quantity modal is open
+
+  function startDashboardTransportDrag(e, originPlanet, btn) {
+    if (e.button !== undefined && e.button !== 0) return; // primary button/touch only
+    dashboardDragState = {
+      originPlanet,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+      sourceBtn: btn,
+      sourceCard: btn.closest('.dash-planet-card'),
+      lastTargetCard: null,
+    };
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* not critical if unsupported */ }
+    btn.addEventListener('pointermove', onDashboardTransportPointerMove);
+    btn.addEventListener('pointerup', onDashboardTransportPointerUp);
+    btn.addEventListener('pointercancel', onDashboardTransportPointerCancel);
+  }
+
+  function onDashboardTransportPointerMove(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (!state.dragging && Math.hypot(dx, dy) > DASHBOARD_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+      state.sourceBtn.classList.add('dragging');
+      state.sourceCard?.classList.add('drag-source-active');
+      document.getElementById('dashboard-drag-overlay')?.classList.remove('hidden');
+    }
+    if (!state.dragging) return;
+    e.preventDefault();
+
+    const originRect = state.sourceBtn.getBoundingClientRect();
+    const line = document.getElementById('dashboard-drag-line');
+    if (line) {
+      line.setAttribute('x1', originRect.left + originRect.width / 2);
+      line.setAttribute('y1', originRect.top + originRect.height / 2);
+      line.setAttribute('x2', e.clientX);
+      line.setAttribute('y2', e.clientY);
+    }
+
+    const hoveredEl = document.elementFromPoint(e.clientX, e.clientY);
+    const hoveredCard = hoveredEl ? hoveredEl.closest('.dash-planet-card') : null;
+    const isValidTarget = !!(hoveredCard && hoveredCard !== state.sourceCard);
+    if (state.lastTargetCard && state.lastTargetCard !== (isValidTarget ? hoveredCard : null)) {
+      state.lastTargetCard.classList.remove('drag-target-valid');
+    }
+    if (isValidTarget) {
+      hoveredCard.classList.add('drag-target-valid');
+      state.lastTargetCard = hoveredCard;
+    } else {
+      state.lastTargetCard = null;
+    }
+  }
+
+  function cleanupDashboardDrag() {
+    const state = dashboardDragState;
+    if (!state) return;
+    state.sourceBtn.removeEventListener('pointermove', onDashboardTransportPointerMove);
+    state.sourceBtn.removeEventListener('pointerup', onDashboardTransportPointerUp);
+    state.sourceBtn.removeEventListener('pointercancel', onDashboardTransportPointerCancel);
+    state.sourceBtn.classList.remove('dragging');
+    state.sourceCard?.classList.remove('drag-source-active');
+    state.lastTargetCard?.classList.remove('drag-target-valid');
+    document.getElementById('dashboard-drag-overlay')?.classList.add('hidden');
+    dashboardDragState = null;
+  }
+
+  function onDashboardTransportPointerCancel(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    cleanupDashboardDrag();
+  }
+
+  function onDashboardTransportPointerUp(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const wasDragging = state.dragging;
+    const targetCard = state.lastTargetCard;
+    const originPlanet = state.originPlanet;
+    cleanupDashboardDrag();
+
+    if (!wasDragging) {
+      // Per the user's own confirmed choice: a plain click/tap (never
+      // exceeded the drag threshold) jumps to that planet and opens 移防
+      // directly, rather than doing anything drag-related.
+      activateDashboardTransportClick(originPlanet);
+      return;
+    }
+    if (!targetCard) return; // dropped somewhere that isn't another card — no-op
+    const destPlanet = myPlanets.find(p => String(p.id) === String(targetCard.dataset.planetId));
+    if (!destPlanet) return;
+    openDashboardRedeployModal(originPlanet, destPlanet);
+  }
+
+  async function activateDashboardTransportClick(originPlanet) {
+    exitDashboardView();
+    await switchToPlanet(originPlanet);
+    // switchToPlanet() fires its own trailing pollUpdates() WITHOUT awaiting
+    // it (same fire-and-forget shape startGame() also uses — see this file's
+    // own note that pollUpdates() has no re-entrancy guard by design). Left
+    // alone, that pending call finishes sometime AFTER the click below and
+    // re-runs updateCurrentSectionHighlight() as part of its own visibility
+    // refresh, which re-scans scroll position and can silently steal the
+    // 移防 pill's "current" highlight back to whatever pill was current
+    // before this switch (caught by this feature's own Playwright test —
+    // navigation and the section itself becoming visible both worked, but
+    // the pill highlight flickered back to 建設 a moment later). Awaiting
+    // one more pollUpdates() cycle here settles that race before we click,
+    // for a one-off UI action — an extra full poll doesn't happen on every
+    // regular 8s tick, only on this specific click path.
+    await pollUpdates();
+    // Reuses the 移防 pill's own click handler (scroll-to + highlight)
+    // instead of duplicating that logic here.
+    document.querySelector('.section-nav-item[data-nav-target="redeploy-section"]')?.click();
+  }
+
+  function openDashboardRedeployModal(originPlanet, destPlanet) {
+    dashboardRedeployContext = { originPlanet, destPlanet };
+    const originName = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
+    const destName = destPlanet.nickname ? destPlanet.nickname : `座標 ${destPlanet.coord}`;
+    document.getElementById('dash-redeploy-title').textContent = `移防:${originName} → ${destName}`;
+    ['dbrd-mothership', 'dbrd-scout', 'dbrd-fighter', 'dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '0';
+    });
+    const msg = document.getElementById('dbrd-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    updateDashboardRedeployCargoEstimate();
+    document.getElementById('dash-redeploy-modal').classList.remove('hidden');
+  }
+
+  function closeDashboardRedeployModal() {
+    document.getElementById('dash-redeploy-modal')?.classList.add('hidden');
+    dashboardRedeployContext = null;
+  }
+
+  // Identical formula to updateRedeployCargoEstimate() (the page-level 移防
+  // form's own live estimate) — just wired to this modal's `dbrd-*` ids.
+  function updateDashboardRedeployCargoEstimate() {
+    const note = document.getElementById('dbrd-cargo-note');
+    if (!note) return;
+    const transport = parseInt(document.getElementById('dbrd-transport').value, 10) || 0;
+    const metal = Math.max(0, parseFloat(document.getElementById('dbrd-metal').value) || 0);
+    const crystal = Math.max(0, parseFloat(document.getElementById('dbrd-crystal').value) || 0);
+    const food = Math.max(0, parseFloat(document.getElementById('dbrd-food').value) || 0);
+    const capacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const loaded = metal + crystal + food;
+    note.textContent = `運輸艦可攜帶上限:${fmt(capacity)}(目前攜帶合計 ${fmt(loaded)},金屬+晶體+糧食共用容量)`;
+    const over = loaded > capacity;
+    note.classList.toggle('insufficient', over);
+    if (over) note.textContent += ` · 超過上限,請增加運輸艦或減少攜帶量`;
+  }
+  ['dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateDashboardRedeployCargoEstimate);
+  });
+  document.getElementById('dash-redeploy-cancel')?.addEventListener('click', closeDashboardRedeployModal);
+  document.getElementById('dash-redeploy-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'dash-redeploy-modal') closeDashboardRedeployModal();
+  });
+  document.getElementById('dash-redeploy-confirm')?.addEventListener('click', onDashboardRedeployConfirmClick);
+
+  async function onDashboardRedeployConfirmClick() {
+    if (!dashboardRedeployContext) return;
+    const { originPlanet, destPlanet } = dashboardRedeployContext;
+    const msg = document.getElementById('dbrd-msg');
+    msg.className = 'attack-msg';
+    const originLabel = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
+
+    const mothership = parseInt(document.getElementById('dbrd-mothership').value, 10) || 0;
+    const scout = parseInt(document.getElementById('dbrd-scout').value, 10) || 0;
+    const fighter = parseInt(document.getElementById('dbrd-fighter').value, 10) || 0;
+    const transport = parseInt(document.getElementById('dbrd-transport').value, 10) || 0;
+    const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-metal').value) || 0));
+    const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-crystal').value) || 0));
+    const food = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-food').value) || 0));
+
+    // Cheap pre-check against the dashboard's own (possibly up to ~8s stale —
+    // same staleness every other dashboard number already tolerates) cached
+    // planet data, purely for instant feedback. launchRedeployFromDashboard()
+    // below re-validates authoritatively against a FRESH read right before
+    // actually committing anything — same "cheap check first, fresh check
+    // right before commit" split onRedeployLaunchClick()/launchRedeploy()
+    // themselves already use for the page-level form.
+    if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership + scout + fighter + transport <= 0) { msg.textContent = '請至少指派 1 艘艦艇'; return; }
+    if (mothership > (originPlanet.mothership_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.mothership_count || 0} 艘殖民母艦`; return; }
+    if (scout > (originPlanet.scout_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.scout_count || 0} 艘偵察機`; return; }
+    if (fighter > (originPlanet.fighter_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.fighter_count || 0} 艘戰鬥機`; return; }
+    if (transport > (originPlanet.transport_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.transport_count || 0} 艘運輸艦`; return; }
+    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const cargoLoaded = metal + crystal + food;
+    if (cargoLoaded > cargoCapacity) {
+      msg.textContent = `${transport} 艘運輸艦最多能載 ${fmt(cargoCapacity)}(金屬+晶體+糧食合計),目前共 ${fmt(cargoLoaded)},請增加運輸艦或減少攜帶量`;
+      return;
+    }
+    if (metal > (Number(originPlanet.metal) || 0)) { msg.textContent = `金屬不足,目前只有 ${fmt(originPlanet.metal)}`; return; }
+    if (crystal > (Number(originPlanet.crystal) || 0)) { msg.textContent = `晶體不足,目前只有 ${fmt(originPlanet.crystal)}`; return; }
+
+    const travelSec = travelSeconds(originPlanet.coord, destPlanet.coord);
+    const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+    const totalFoodNeeded = travelFoodCost + food;
+    if (totalFoodNeeded > (Number(originPlanet.food) || 0)) {
+      msg.textContent = `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(originPlanet.food)})`;
+      return;
+    }
+
+    const confirmBtn = document.getElementById('dash-redeploy-confirm');
+    confirmBtn.disabled = true;
+    let result;
+    try {
+      result = await launchRedeployFromDashboard(originPlanet, destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec });
+    } finally {
+      confirmBtn.disabled = false;
+    }
+    if (!result.ok) { msg.textContent = result.message; return; }
+
+    closeDashboardRedeployModal();
+    showToast(`艦隊已從${originLabel}出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    await loadDashboardOverview();
+  }
+
+  // Dashboard-drag counterpart to launchRedeploy() (the page-level 移防
+  // form's own launch function, further below). launchRedeploy()/
+  // onRedeployLaunchClick() both read and write the GLOBAL `planet`/
+  // `localMetal`/`localCrystal`/`localFood` — correct for that form, which
+  // only ever launches FROM whichever planet is currently active, but wrong
+  // here since a dashboard drag can originate from ANY owned planet, active
+  // or not, while the player stays on 總覽 the whole time (never switches
+  // the active planet). Two branches:
+  //   - origin IS the active planet: mutate the exact same globals
+  //     launchRedeploy() would (kept inline here, not delegated, so a
+  //     validation failure surfaces in THIS modal's `#dbrd-msg` instead of
+  //     the page-level form's `#redeploy-msg` element, which is off-page/
+  //     hidden while 總覽 is active and would otherwise swallow the message).
+  //   - origin is a DIFFERENT, currently-inactive planet: fetch that
+  //     planet's row fresh (same "validate against a fresh read immediately
+  //     before commit" standard fetchDestinationFleetStatus() already holds
+  //     itself to) and PATCH its ship/resource counts directly — deliberately
+  //     bypassing localMetal/saveToServer() (which only ever represent the
+  //     ACTIVE planet) so the active planet's own background tick() can
+  //     never race with or silently clobber this write.
+  async function launchRedeployFromDashboard(originPlanet, destPlanet, amounts) {
+    const { mothership, scout, fighter, transport, metal, crystal, food, travelSec } = amounts;
+    const totalToSend = mothership + scout + fighter + transport;
+
+    let status;
+    try {
+      status = await fetchDestinationFleetStatus(destPlanet.id);
+    } catch (err) {
+      console.error('Fetch destination fleet status error:', err);
+      return { ok: false, message: '無法確認目的地艦隊狀態,請稍後再試' };
+    }
+    if (!status) return { ok: false, message: '找不到目的地殖民地資料' };
+    if (status.total + totalToSend > status.cap) {
+      return { ok: false, message: `目的地艦隊已接近上限(${fmt(status.total)}/${fmt(status.cap)}),加派 ${fmt(totalToSend)} 艘會超過上限,請減少派遣數量` };
+    }
+
+    const isActivePlanet = planet && String(planet.id) === String(originPlanet.id);
+    let originId, originName, originCoord;
+
+    if (isActivePlanet) {
+      if (mothership > (planet.mothership_count || 0)) return { ok: false, message: `你在家只有 ${planet.mothership_count || 0} 艘殖民母艦` };
+      if (scout > (planet.scout_count || 0)) return { ok: false, message: `你在家只有 ${planet.scout_count || 0} 艘偵察機` };
+      if (fighter > (planet.fighter_count || 0)) return { ok: false, message: `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機` };
+      if (transport > (planet.transport_count || 0)) return { ok: false, message: `你在家只有 ${planet.transport_count || 0} 艘運輸艦` };
+      if (metal > localMetal) return { ok: false, message: `金屬不足,目前只有 ${fmt(localMetal)}` };
+      if (crystal > localCrystal) return { ok: false, message: `晶體不足,目前只有 ${fmt(localCrystal)}` };
+      const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+      if (travelFoodCost + food > localFood) {
+        return { ok: false, message: `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${travelFoodCost + food}(現有 ${Math.floor(localFood)})` };
+      }
+
+      planet.mothership_count = (planet.mothership_count || 0) - mothership;
+      planet.scout_count = (planet.scout_count || 0) - scout;
+      planet.fighter_count = (planet.fighter_count || 0) - fighter;
+      planet.transport_count = (planet.transport_count || 0) - transport;
+      localMetal -= metal;
+      localCrystal -= crystal;
+      localFood -= travelFoodCost;
+      localFood -= food;
+      renderResources();
+      if (metal > 0) flashResource('metal-value', 'danger');
+      if (crystal > 0) flashResource('crystal-value', 'danger');
+      if (food > 0) flashResource('food-value', 'danger');
+      await saveToServer();
+      renderFleetTopBar();
+      originId = planet.id; originName = planet.player_name; originCoord = planet.coord;
+    } else {
+      let originFresh;
+      try {
+        const rows = await restRequest(`planets?id=eq.${originPlanet.id}&select=*`);
+        originFresh = rows && rows[0];
+      } catch (err) {
+        console.error('Fetch origin planet error:', err);
+        return { ok: false, message: '無法確認來源星球狀態,請稍後再試' };
+      }
+      if (!originFresh) return { ok: false, message: '找不到來源殖民地資料' };
+      const originLabel = originFresh.nickname ? originFresh.nickname : `座標 ${originFresh.coord}`;
+      if (mothership > (originFresh.mothership_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.mothership_count || 0} 艘殖民母艦` };
+      if (scout > (originFresh.scout_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.scout_count || 0} 艘偵察機` };
+      if (fighter > (originFresh.fighter_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.fighter_count || 0} 艘戰鬥機` };
+      if (transport > (originFresh.transport_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.transport_count || 0} 艘運輸艦` };
+      if (metal > (Number(originFresh.metal) || 0)) return { ok: false, message: `金屬不足,目前只有 ${fmt(originFresh.metal)}` };
+      if (crystal > (Number(originFresh.crystal) || 0)) return { ok: false, message: `晶體不足,目前只有 ${fmt(originFresh.crystal)}` };
+      const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+      const totalFoodNeeded = travelFoodCost + food;
+      if (totalFoodNeeded > (Number(originFresh.food) || 0)) {
+        return { ok: false, message: `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(originFresh.food)})` };
+      }
+
+      try {
+        await restRequest(`planets?id=eq.${originFresh.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            mothership_count: (originFresh.mothership_count || 0) - mothership,
+            scout_count: (originFresh.scout_count || 0) - scout,
+            fighter_count: (originFresh.fighter_count || 0) - fighter,
+            transport_count: (originFresh.transport_count || 0) - transport,
+            metal: (Number(originFresh.metal) || 0) - metal,
+            crystal: (Number(originFresh.crystal) || 0) - crystal,
+            food: (Number(originFresh.food) || 0) - travelFoodCost - food,
+          }),
+        });
+      } catch (err) {
+        console.error('Patch origin planet error:', err);
+        return { ok: false, message: '扣除來源星球艦隊/資源失敗,請稍後再試' };
+      }
+
+      // Keep the in-memory myPlanets snapshot consistent with what was just
+      // PATCHed, so the dashboard's very next render (right after this
+      // resolves) doesn't show stale pre-deduction numbers for a few seconds.
+      const idx = myPlanets.findIndex(mp => String(mp.id) === String(originFresh.id));
+      if (idx >= 0) {
+        myPlanets[idx] = {
+          ...myPlanets[idx],
+          mothership_count: (originFresh.mothership_count || 0) - mothership,
+          scout_count: (originFresh.scout_count || 0) - scout,
+          fighter_count: (originFresh.fighter_count || 0) - fighter,
+          transport_count: (originFresh.transport_count || 0) - transport,
+          metal: (Number(originFresh.metal) || 0) - metal,
+          crystal: (Number(originFresh.crystal) || 0) - crystal,
+          food: (Number(originFresh.food) || 0) - travelFoodCost - food,
+        };
+      }
+      originId = originFresh.id; originName = originFresh.player_name; originCoord = originFresh.coord;
+    }
+
+    const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
+    try {
+      await restRequest('redeploy_missions', {
+        method: 'POST',
+        body: JSON.stringify({
+          player_name: originName,
+          origin_planet_id: originId,
+          destination_planet_id: destPlanet.id,
+          destination_coord: destPlanet.coord,
+          mothership_ships_sent: mothership,
+          scout_ships_sent: scout,
+          fighter_ships_sent: fighter,
+          transport_ships_sent: transport,
+          metal_sent: metal,
+          crystal_sent: crystal,
+          food_sent: food,
+          launched_at: new Date().toISOString(),
+          arrival_time: arrivalTime,
+          resolved: false,
+        }),
+      });
+    } catch (err) {
+      console.error('Post redeploy mission error:', err);
+      return { ok: false, message: '艦隊/資源已扣除,但任務建立失敗,請稍後重新整理確認狀態' };
+    }
+
+    return { ok: true };
   }
 
   // ============================================================
