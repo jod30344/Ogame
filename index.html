@@ -7772,15 +7772,23 @@
         // OPTIMIZATION ROUND additions (在途任務): every one of these is the
         // player's own OUTGOING activity — nothing on this page showed any of
         // it before, only incoming alerts (the two queries just above) did.
-        restRequest(`colonization_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,target_coord,arrival_time&order=arrival_time.asc`),
-        restRequest(`redeploy_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,destination_planet_id,destination_coord,arrival_time&order=arrival_time.asc`),
+        // ship-sent fields added this round (mothership/scout/fighter/transport
+        // _ships_sent) — needed so the dashboard can tell whether a planet's
+        // fleet is already at its cap (see fleetCapForHomesteadLevel()) before
+        // nagging about an idle shipyard; previously this query only pulled
+        // enough to render the "殖民中" line, not to count committed ships.
+        restRequest(`colonization_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,target_coord,arrival_time,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent&order=arrival_time.asc`),
+        restRequest(`redeploy_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,destination_planet_id,destination_coord,arrival_time,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent&order=arrival_time.asc`),
         // approval_status=neq.pending: an un-approved outgoing transport
         // request hasn't actually launched yet (see pendingOutgoingTransports'
         // own comment) — it belongs in "awaiting a decision", not "in transit",
         // and this dashboard doesn't surface outgoing pending requests at all
         // (only INCOMING ones, above, need the player's own response).
-        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=attacker_planet_id,defender_name,arrival_time&order=arrival_time.asc`),
-        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.transport&approval_status=neq.pending&select=attacker_planet_id,defender_name,arrival_time&order=arrival_time.asc`),
+        // fighter_ships_sent/ships_sent (legacy fallback, same accessor as
+        // fleetAwayCount()) and transport_ships_sent added this round for the
+        // same fleet-cap accounting as the colonize/redeploy queries above.
+        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=attacker_planet_id,defender_name,arrival_time,fighter_ships_sent,ships_sent&order=arrival_time.asc`),
+        restRequest(`fleet_missions?attacker_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.transport&approval_status=neq.pending&select=attacker_planet_id,defender_name,arrival_time,transport_ships_sent&order=arrival_time.asc`),
       ]);
       renderDashboardOverview({
         buildingRows: buildingRows || [], queueRows: queueRows || [], shipQueueRows: shipQueueRows || [],
@@ -7869,10 +7877,15 @@
     // REVISION comment above `#dashboard-summary` in the HTML): one grouped
     // lookup per outgoing mission category, keyed by the planet that
     // launched it.
-    const colonizeByPlanet = groupMissionsByPlanet(colonizeRows, 'origin_planet_id', 'arrival_time');
-    const redeployByPlanet = groupMissionsByPlanet(redeployRows, 'origin_planet_id', 'arrival_time');
-    const outAttackByPlanet = groupMissionsByPlanet(outAttackRows, 'attacker_planet_id', 'arrival_time');
-    const outTransportByPlanet = groupMissionsByPlanet(outTransportRows, 'attacker_planet_id', 'arrival_time');
+    // shipsFn added this round on all four (previously only 'explore' summed
+    // ships) — needed for the per-planet fleet-cap check below. Doesn't
+    // affect existing rendering: missionGroupHtml() only reads `.ships` for
+    // the 'explore' category, so these groups render exactly as before.
+    const allShipTypesSentFn = r => (r.mothership_ships_sent || 0) + (r.scout_ships_sent || 0) + (r.fighter_ships_sent || 0) + (r.transport_ships_sent || 0);
+    const colonizeByPlanet = groupMissionsByPlanet(colonizeRows, 'origin_planet_id', 'arrival_time', allShipTypesSentFn);
+    const redeployByPlanet = groupMissionsByPlanet(redeployRows, 'origin_planet_id', 'arrival_time', allShipTypesSentFn);
+    const outAttackByPlanet = groupMissionsByPlanet(outAttackRows, 'attacker_planet_id', 'arrival_time', r => r.fighter_ships_sent || r.ships_sent || 0);
+    const outTransportByPlanet = groupMissionsByPlanet(outTransportRows, 'attacker_planet_id', 'arrival_time', r => r.transport_ships_sent || 0);
 
     const planetNameById = {};
     myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
@@ -7918,13 +7931,37 @@
       const hasShipyardHere = buildings.some(b => b.building_type === 'shipyard');
       const shipQueue = shipQueueByPlanet[p.id] || [];
       const shipFront = shipQueue[0];
+
+      // Per user request ("請系統判斷我每個星球的艦隊數量是否已達上限,不然我
+      // 造船廠閒置也不用通知我可安排生產") — an idle shipyard with no room left
+      // under this planet's own 艦隊上限 isn't actually actionable, so it
+      // shouldn't get the "⚠ 可安排新生產" nudge (or count toward idleCount/
+      // cardIdle below). Mirrors currentFleetTotal()'s exact accounting
+      // (home + exploring + building + colonizing + redeploying[out] +
+      // attacking[out] + transporting[out]) and fleetCapForHomesteadLevel(),
+      // the same formula buildShips() itself already enforces server-side —
+      // so this stays consistent with what actually blocks production,
+      // rather than inventing a separate/looser definition of "at cap".
+      const homesteadLevelHere = (buildings.find(b => b.building_type === 'homestead') || {}).level || 1;
+      const fleetCapHere = fleetCapForHomesteadLevel(homesteadLevelHere);
+      const shipQueueTotal = shipQueue.reduce((sum, r) => sum + (r.count || 0), 0);
+      const fleetTotalHere = fleetHome + fleetExploring + shipQueueTotal
+        + (colonizeByPlanet[p.id] ? colonizeByPlanet[p.id].ships : 0)
+        + (redeployByPlanet[p.id] ? redeployByPlanet[p.id].ships : 0)
+        + (outAttackByPlanet[p.id] ? outAttackByPlanet[p.id].ships : 0)
+        + (outTransportByPlanet[p.id] ? outTransportByPlanet[p.id].ships : 0);
+      const atFleetCap = fleetTotalHere >= fleetCapHere;
+
+      const shipyardActionableIdle = hasShipyardHere && !shipFront && !atFleetCap;
       const shipHtml = hasShipyardHere
         ? `<div class="dash-ship-row">${shipFront
             ? `<span class="dash-queue-active">${(SHIP_TYPES[shipFront.ship_type] || {}).name || shipFront.ship_type} ×${fmt(shipFront.count)} · ${dashboardEtaText(shipFront.complete_at)}</span>`
-            : `<span class="dash-queue-idle">⚠ 造船廠閒置,可安排新生產</span>`}</div>`
+            : (atFleetCap
+                ? `<span class="dash-queue-active">艦隊已達上限(${fmt(fleetTotalHere)}／${fmt(fleetCapHere)}),造船廠暫無需排產</span>`
+                : `<span class="dash-queue-idle">⚠ 造船廠閒置,可安排新生產</span>`)}</div>`
         : '';
 
-      const cardIdle = !front && (!hasShipyardHere || !shipFront);
+      const cardIdle = !front && (!hasShipyardHere || shipyardActionableIdle);
       if (cardIdle) idleCount++;
 
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
