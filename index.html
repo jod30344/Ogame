@@ -186,6 +186,19 @@
   .res-value { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .res-rate { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: 'Space Mono', monospace; }
   .res-rate.negative { color: var(--warn); font-weight: 600; }
+  /* 拖曳資源到其他星球 — the whole card is the drag handle (see the
+     pointerdown/move/up trio near launchRedeployFromDashboard()'s own
+     drag-to-redeploy code, further down). touch-action:none stops
+     touchscreens from scrolling the page instead of starting a drag once a
+     pointer moves past the threshold. Scoped to the sticky per-planet
+     `#resources-bar` only — the visually identical `.res-card`s inside
+     總覽's own 全文明 grand-totals strip are informational only and must
+     stay that way, so this rule intentionally does not apply there. */
+  #resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food { cursor: grab; touch-action: none; }
+  #resources-bar .res-card.metal:hover, #resources-bar .res-card.metal.dragging { border-color: var(--metal); }
+  #resources-bar .res-card.crystal:hover, #resources-bar .res-card.crystal.dragging { border-color: var(--crystal); }
+  #resources-bar .res-card.food:hover, #resources-bar .res-card.food.dragging { border-color: var(--food); }
+  #resources-bar .res-card.dragging { cursor: grabbing; }
 
   .section-label {
     font-family: 'Space Mono', monospace;
@@ -968,6 +981,9 @@
   .planet-tab:hover { border-color: var(--ok); }
   .planet-tab.active { border-color: var(--ok); color: var(--text-main); background: #16281f; }
   .planet-tab .home-mark { color: var(--crystal); }
+  /* Drop-target glow while dragging a resource card from #resources-bar over
+     this tab — same treatment 總覽's own drag-target-valid card glow uses. */
+  .planet-tab.drag-target-valid { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(79, 209, 165, 0.35); }
 
   /* Fleet resource card in the sticky bar */
   .res-card.fleet::before { background: var(--ok); }
@@ -8707,6 +8723,162 @@
     }
 
     return { ok: true };
+  }
+
+  // ============================================================
+  // 拖曳資源到其他星球 (drag-to-redeploy from the resource bar) — per user
+  // request, a follow-up to 總覽's own drag-to-redeploy feature above: "我很
+  // 喜歡拖曳的功能,請幫我在每個星球的金屬、晶體、糧食,也弄一個運輸,讓他們可以
+  // 拖曳到上面露比一號、二號的星球上。" This is the same 移防 mechanic, just
+  // triggered from the per-planet page's sticky `#resources-bar` cards
+  // instead of a 總覽 card's 運輸 button, and dropped onto `.planet-tab`
+  // pills instead of other 總覽 cards. Confirmed via AskUserQuestion: (1) the
+  // SAME `#dash-redeploy-modal` used by 總覽's own drag reopens here too
+  // (rather than a separate resource-only modal), with the dragged
+  // resource's own field pre-filled as a starting point and every other
+  // field left for the player to fill in themselves; (2) the whole resource
+  // card is the drag handle (no separate icon needed, unlike 總覽's cards,
+  // which needed a dedicated 運輸 button so a plain click could still mean
+  // "go to that planet's page" — these resource cards had no click behavior
+  // to preserve, so the whole card can safely BE the handle).
+  //
+  // Since this page is always showing exactly one ACTIVE planet, the origin
+  // is always the global `planet` object — never another, inactive one — so
+  // this reuses openDashboardRedeployModal()/launchRedeployFromDashboard()
+  // as-is rather than duplicating that modal/launch logic: passing the
+  // literal global `planet` as originPlanet makes
+  // launchRedeployFromDashboard()'s own `isActivePlanet` check true, which
+  // routes it through that function's "mutate the live globals directly"
+  // branch — exactly the behavior the page-level 移防 form itself uses.
+  // ============================================================
+  const RESOURCE_DRAG_THRESHOLD_PX = 6;
+  let resourceDragState = null; // set while a resource-card pointer is down
+
+  function startResourceDrag(e, resourceType, card) {
+    if (!planet) return;
+    if (e.button !== undefined && e.button !== 0) return; // primary button/touch only
+    resourceDragState = {
+      resourceType,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+      sourceCard: card,
+      lastTargetTab: null,
+    };
+    try { card.setPointerCapture(e.pointerId); } catch (err) { /* not critical if unsupported */ }
+    card.addEventListener('pointermove', onResourceDragMove);
+    card.addEventListener('pointerup', onResourceDragUp);
+    card.addEventListener('pointercancel', onResourceDragCancel);
+  }
+
+  function onResourceDragMove(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (!state.dragging && Math.hypot(dx, dy) > RESOURCE_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+      state.sourceCard.classList.add('dragging');
+      document.getElementById('dashboard-drag-overlay')?.classList.remove('hidden');
+    }
+    if (!state.dragging) return;
+    e.preventDefault();
+
+    const originRect = state.sourceCard.getBoundingClientRect();
+    const line = document.getElementById('dashboard-drag-line');
+    if (line) {
+      line.setAttribute('x1', originRect.left + originRect.width / 2);
+      line.setAttribute('y1', originRect.top + originRect.height / 2);
+      line.setAttribute('x2', e.clientX);
+      line.setAttribute('y2', e.clientY);
+    }
+
+    const hoveredEl = document.elementFromPoint(e.clientX, e.clientY);
+    const hoveredTab = hoveredEl ? hoveredEl.closest('.planet-tab[data-planet-id]') : null;
+    const isValidTarget = !!(hoveredTab && String(hoveredTab.dataset.planetId) !== String(planet.id));
+    if (state.lastTargetTab && state.lastTargetTab !== (isValidTarget ? hoveredTab : null)) {
+      state.lastTargetTab.classList.remove('drag-target-valid');
+    }
+    if (isValidTarget) {
+      hoveredTab.classList.add('drag-target-valid');
+      state.lastTargetTab = hoveredTab;
+    } else {
+      state.lastTargetTab = null;
+    }
+  }
+
+  function cleanupResourceDrag() {
+    const state = resourceDragState;
+    if (!state) return;
+    state.sourceCard.removeEventListener('pointermove', onResourceDragMove);
+    state.sourceCard.removeEventListener('pointerup', onResourceDragUp);
+    state.sourceCard.removeEventListener('pointercancel', onResourceDragCancel);
+    state.sourceCard.classList.remove('dragging');
+    state.lastTargetTab?.classList.remove('drag-target-valid');
+    document.getElementById('dashboard-drag-overlay')?.classList.add('hidden');
+    resourceDragState = null;
+  }
+
+  function onResourceDragCancel(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    cleanupResourceDrag();
+  }
+
+  function onResourceDragUp(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const wasDragging = state.dragging;
+    const targetTab = state.lastTargetTab;
+    const resourceType = state.resourceType;
+    cleanupResourceDrag();
+
+    // Below-threshold pointerdown+up (a plain click) is a no-op — these
+    // resource cards were purely informational before this feature and stay
+    // that way for a non-drag click; only an actual drag-and-drop onto
+    // another planet's tab does anything.
+    if (!wasDragging || !targetTab) return;
+    const destPlanet = myPlanets.find(p => String(p.id) === String(targetTab.dataset.planetId));
+    if (!destPlanet || !planet) return;
+    openResourceRedeployModal(planet, destPlanet, resourceType);
+  }
+
+  document.querySelectorAll('#resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food').forEach(card => {
+    const resourceType = card.classList.contains('metal') ? 'metal' : card.classList.contains('crystal') ? 'crystal' : 'food';
+    card.addEventListener('pointerdown', (e) => startResourceDrag(e, resourceType, card));
+  });
+
+  // Opens the same 移防 modal 總覽's own drag feature uses, then pre-fills
+  // ONLY the dragged resource's own field — every other field (ships, the
+  // other two resources) is left at openDashboardRedeployModal()'s normal
+  // all-zero default for the player to fill in themselves, per the user's
+  // own confirmed choice. Defaults to HALF of the current stock (floored),
+  // not the full amount: a redeploy also burns some food for the trip
+  // itself on top of whatever's loaded as cargo, so defaulting 糧食 to 100%
+  // of current stock would leave zero headroom for that travel cost and
+  // fail validation the moment the player tried to confirm without first
+  // lowering it — a fixed 50% leaves that headroom automatically (as well
+  // as being a more conservative "don't empty the whole stockpile in one
+  // drag" default for 金屬/晶體 too), while still being a real, useful
+  // starting point rather than another blank 0. Also defaults the transport
+  // count to just enough to carry that amount (capped at how many transport
+  // ships are actually on hand), so the cargo-capacity note starts clean
+  // instead of immediately warning about 0 capacity.
+  function openResourceRedeployModal(originPlanet, destPlanet, resourceType) {
+    openDashboardRedeployModal(originPlanet, destPlanet);
+    const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    const amount = Math.floor((Number(originPlanet[resourceType]) || 0) * 0.5);
+    field.value = String(amount);
+    const perShip = SHIP_TYPES.transport.cargoCapacity;
+    if (amount > 0 && perShip > 0) {
+      const neededTransports = Math.min(originPlanet.transport_count || 0, Math.ceil(amount / perShip));
+      const transportField = document.getElementById('dbrd-transport');
+      if (transportField) transportField.value = String(neededTransports);
+    }
+    updateDashboardRedeployCargoEstimate();
   }
 
   // ============================================================
