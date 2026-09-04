@@ -411,6 +411,10 @@
   .dash-resource-row .crystal { color: var(--crystal); }
   .dash-resource-row .food { color: var(--food); }
   .dash-fleet-row { font-size: 12px; color: var(--text-dim); }
+  /* Per user request ("我想讓艦隊數量可以顯現上限") — same 90%-of-cap threshold
+     and --warn tint as the single-planet page's own #fleet-cap-summary badge
+     (see renderFleetTopBar()), just inline text here instead of a pill. */
+  .dash-fleet-cap.near-cap { color: var(--warn); font-weight: 600; }
   .dash-building-row, .dash-ship-row, .dash-mission-row { font-size: 12px; }
   .dash-queue-active { color: var(--ok); }
   .dash-queue-idle { color: var(--crystal); }
@@ -1266,10 +1270,9 @@
        已知星球/艦隊動向/戰報 already use — per the user's own request to tie
        this to 戰情中心 rather than gating it some other way. -->
   <div id="dashboard-section" class="hidden">
-    <div class="section-label">
-      <span>總覽</span>
-    </div>
-    <div class="section-note">跨殖民地的總覽,不必切換星球逐一查看</div>
+    <!-- Per user request ("這兩行字可以拿掉,不需要特別介紹") — the "總覽" heading
+         and its explanatory note used to sit here; removed since the pill
+         itself already says 總覽 and the page's content speaks for itself. -->
     <!-- OPTIMIZATION ROUND (user request after seeing 總覽 live: "我需要讓玩家
          看著這個儀表板就知道發生各種事") — 4 improvements, all picked via
          AskUserQuestion: (1) this badge strip, a zero-reading-required
@@ -2634,6 +2637,19 @@
   // updateActionSectionVisibility() call, which consumes it to auto-enter 總覽
   // if it's already unlocked ("登入後的第一個畫面" — see that function).
   let justLoggedIn = false;
+  // Per user question ("為什麼總覽的數字不會即時跳動") — the 4 grand-total
+  // stock numbers on 總覽 only ever got server-fresh values, once per
+  // loadDashboardOverview() call (every pollUpdates() cycle, ~8s apart — see
+  // its own comment), unlike the normal top resource bar which extrapolates
+  // client-side every 500ms via tick()/totalRate() so it visibly ticks up in
+  // real time. This snapshot + tickDashboardTotals() (called from tick(),
+  // same 500ms cadence) gives 總覽's own stock numbers the same live-ticking
+  // treatment: captured once per fresh fetch in renderDashboardOverview(),
+  // then extrapolated forward using each grand rate until the next fetch
+  // replaces it. Rates themselves aren't re-derived here — they're already
+  // correct as of the last fetch and change slowly enough (only when a
+  // mining building's queue resolves) that waiting for the next poll is fine.
+  let dashboardTotalsSnapshot = null;
   let ownBuildings = [];       // rows from `buildings` for this planet
   let constructionRows = [];   // rows from `construction_queue`, status != done
   let shipQueueRows = [];      // rows from `ship_queue`, status != done
@@ -4100,6 +4116,27 @@
     localFood += totalRate('food') * elapsedSec;
     resolveFoodUpkeep(elapsedSec);
     renderResources();
+    tickDashboardTotals();
+  }
+
+  // See dashboardTotalsSnapshot's declaration for why this exists. Only
+  // touches the 4 grand-total `.res-value` text nodes directly (no
+  // innerHTML rebuild of the whole totals strip, let alone the planet
+  // cards) so this can run every 500ms alongside the normal resource tick
+  // without any risk of disrupting the goto-planet button listeners bound
+  // elsewhere in renderDashboardOverview(). A no-op whenever 總覽 isn't the
+  // active view or no fetch has completed yet.
+  function tickDashboardTotals() {
+    if (!dashboardViewActive || !dashboardTotalsSnapshot) return;
+    const totalsEl = document.getElementById('dashboard-grand-totals');
+    if (!totalsEl) return;
+    const elapsedSec = (Date.now() - dashboardTotalsSnapshot.capturedAt) / 1000;
+    const metalEl = totalsEl.querySelector('.res-card.metal .res-value');
+    const crystalEl = totalsEl.querySelector('.res-card.crystal .res-value');
+    const foodEl = totalsEl.querySelector('.res-card.food .res-value');
+    if (metalEl) metalEl.textContent = fmt(dashboardTotalsSnapshot.metal + dashboardTotalsSnapshot.metalRate * elapsedSec);
+    if (crystalEl) crystalEl.textContent = fmt(dashboardTotalsSnapshot.crystal + dashboardTotalsSnapshot.crystalRate * elapsedSec);
+    if (foodEl) foodEl.textContent = fmt(dashboardTotalsSnapshot.food + dashboardTotalsSnapshot.foodRate * elapsedSec);
   }
 
   // Sum of every home ship count (mothership included — it eats too — but
@@ -7998,7 +8035,7 @@
           <span class="crystal">晶體 +${fmt(crystalRate)}/秒</span>
           <span class="food">糧食 +${fmt(foodRate)}/秒</span>
         </div>
-        <div class="dash-fleet-row">艦隊 在家 ${fmt(fleetHome)}${fleetExploring > 0 ? ` · 探索中 ${fmt(fleetExploring)}` : ''}</div>
+        <div class="dash-fleet-row">艦隊 在家 ${fmt(fleetHome)}${fleetExploring > 0 ? ` · 探索中 ${fmt(fleetExploring)}` : ''} · <span class="dash-fleet-cap${atFleetCap || fleetTotalHere >= fleetCapHere * 0.9 ? ' near-cap' : ''}">總計 ${fmt(fleetTotalHere)}／上限 ${fmt(fleetCapHere)}</span></div>
         <div class="dash-building-row">${buildingHtml}</div>
         ${shipHtml}
         ${exploreRowHtml}
@@ -8030,6 +8067,16 @@
         <div class="res-value">${fmt(grandFleetHome + grandFleetExploring)}</div>
         <div class="res-rate">在家 ${fmt(grandFleetHome)} · 探索中 ${fmt(grandFleetExploring)}</div>
       </div>`;
+
+    // Snapshot for tickDashboardTotals() — see that function's own comment
+    // and dashboardTotalsSnapshot's declaration for why this exists (live
+    // per-500ms ticking between the ~8s-apart real fetches, matching how the
+    // normal resource bar already behaves for the currently-viewed planet).
+    dashboardTotalsSnapshot = {
+      metal: grandMetalStock, crystal: grandCrystalStock, food: grandFoodStock,
+      metalRate: grandMetalRate, crystalRate: grandCrystalRate, foodRate: grandFoodRate,
+      capturedAt: Date.now(),
+    };
 
     // OPTIMIZATION ROUND addition: pending-action badge strip — a
     // zero-reading-required "does anything need me right now" summary above
