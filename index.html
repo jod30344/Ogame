@@ -194,11 +194,59 @@
      `#resources-bar` only — the visually identical `.res-card`s inside
      總覽's own 全文明 grand-totals strip are informational only and must
      stay that way, so this rule intentionally does not apply there. */
-  #resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food { cursor: grab; touch-action: none; }
+  #resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food, #resources-bar .res-card.fleet { cursor: grab; touch-action: none; }
   #resources-bar .res-card.metal:hover, #resources-bar .res-card.metal.dragging { border-color: var(--metal); }
   #resources-bar .res-card.crystal:hover, #resources-bar .res-card.crystal.dragging { border-color: var(--crystal); }
   #resources-bar .res-card.food:hover, #resources-bar .res-card.food.dragging { border-color: var(--food); }
+  #resources-bar .res-card.fleet:hover, #resources-bar .res-card.fleet.dragging { border-color: var(--ok); }
   #resources-bar .res-card.dragging { cursor: grabbing; }
+  /* Small always-visible grip glyph in each draggable card's corner — a
+     cursor:grab on its own is easy to never notice (raised directly by the
+     user: "我也擔心會不會不太直觀"), so this gives a persistent visual cue
+     even before the card is ever touched. Muted by default, brightens on
+     hover/drag so it reads as "this is interactive" without competing with
+     the card's actual numbers. */
+  .drag-hint-icon {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    opacity: 0.5;
+    letter-spacing: -1px;
+    pointer-events: none;
+    user-select: none;
+  }
+  #resources-bar .res-card:hover .drag-hint-icon, #resources-bar .res-card.dragging .drag-hint-icon { opacity: 1; color: var(--ok); }
+  /* The fleet card's top-right corner is already taken by the 總數 X/Y cap
+     pill (.fleet-cap-summary) — bottom-right is the only open corner left. */
+  .res-card.fleet .drag-hint-icon { top: auto; bottom: 8px; right: 10px; }
+  /* One-time dismissible hint banner — see the HTML comment just above
+     #drag-hint-banner for when it shows/hides. */
+  .drag-hint-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: rgba(79, 209, 165, 0.08);
+    border: 1px solid rgba(79, 209, 165, 0.35);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 16px 0 0;
+    font-size: 13px;
+    color: var(--text-main);
+  }
+  .drag-hint-banner button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px 4px;
+    flex-shrink: 0;
+  }
+  .drag-hint-banner button:hover { color: var(--text-main); }
 
   .section-label {
     font-family: 'Space Mono', monospace;
@@ -1359,23 +1407,39 @@
 
   <div class="planet-switcher hidden" id="planet-switcher"></div>
 
+  <!-- 拖曳移防的一次性提示條 — per user concern ("我也擔心會不會不太直觀,導致
+       玩家不清楚有這個功能"): the drag itself has no other visual cue besides
+       a cursor:grab, easy to miss entirely. Shown only for multi-planet
+       accounts (see updateDragHintVisibility()) and only until the player
+       either dismisses it or actually performs one successful drag
+       (dismissDragHint() is called from both places) — see that function's
+       own comment for the localStorage persistence. -->
+  <div class="drag-hint-banner hidden" id="drag-hint-banner">
+    <span>💡 提示:金屬、晶體、糧食、艦隊卡片都可以直接拖曳到上方的星球分頁,快速移防!</span>
+    <button id="drag-hint-dismiss" type="button" aria-label="關閉提示">✕</button>
+  </div>
+
   <div class="resources" id="resources-bar">
     <div class="res-card metal">
+      <span class="drag-hint-icon" title="拖曳到上方星球分頁可快速移防">⠿</span>
       <div class="res-label">金屬</div>
       <div class="res-value" id="metal-value">0</div>
       <div class="res-rate" id="metal-rate">+0 / 秒</div>
     </div>
     <div class="res-card crystal">
+      <span class="drag-hint-icon" title="拖曳到上方星球分頁可快速移防">⠿</span>
       <div class="res-label">晶體</div>
       <div class="res-value" id="crystal-value">0</div>
       <div class="res-rate" id="crystal-rate">+0 / 秒</div>
     </div>
     <div class="res-card food">
+      <span class="drag-hint-icon" title="拖曳到上方星球分頁可快速移防">⠿</span>
       <div class="res-label">糧食</div>
       <div class="res-value" id="food-value">0</div>
       <div class="res-rate" id="food-rate">+0 / 秒</div>
     </div>
     <div class="res-card fleet wide hidden" id="fleet-top-card">
+      <span class="drag-hint-icon" title="拖曳到上方星球分頁可快速移防">⠿</span>
       <div class="fleet-top-header">
         <div class="res-label">艦隊</div>
         <div class="fleet-cap-summary" id="fleet-cap-summary"></div>
@@ -3579,6 +3643,10 @@
     // colonization) — piggybacking here is the single point every one of
     // those call sites already goes through.
     renderRedeployTargets();
+    // Piggybacking on the same call sites as renderRedeployTargets() just
+    // above, for the same reason — see updateDragHintVisibility()'s own
+    // comment for what this actually toggles.
+    updateDragHintVisibility();
     const container = document.getElementById('planet-switcher');
     if (!container) return;
     if (myPlanets.length <= 1) {
@@ -8844,29 +8912,60 @@
     openResourceRedeployModal(planet, destPlanet, resourceType);
   }
 
-  document.querySelectorAll('#resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food').forEach(card => {
-    const resourceType = card.classList.contains('metal') ? 'metal' : card.classList.contains('crystal') ? 'crystal' : 'food';
+  // REVISION: also draggable from #fleet-top-card (per user follow-up
+  // request: "我覺得艦隊也可以透過這個方式直接移防,幫我加進去") — same drag
+  // mechanism, just a 4th card/resourceType ('fleet' alongside metal/
+  // crystal/food). See openResourceRedeployModal()'s 'fleet' branch below
+  // for what dragging this one pre-fills.
+  document.querySelectorAll('#resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food, #resources-bar .res-card.fleet').forEach(card => {
+    const resourceType = card.classList.contains('metal') ? 'metal'
+      : card.classList.contains('crystal') ? 'crystal'
+      : card.classList.contains('food') ? 'food'
+      : 'fleet';
     card.addEventListener('pointerdown', (e) => startResourceDrag(e, resourceType, card));
   });
 
   // Opens the same 移防 modal 總覽's own drag feature uses, then pre-fills
-  // ONLY the dragged resource's own field — every other field (ships, the
-  // other two resources) is left at openDashboardRedeployModal()'s normal
-  // all-zero default for the player to fill in themselves, per the user's
-  // own confirmed choice. Defaults to HALF of the current stock (floored),
-  // not the full amount: a redeploy also burns some food for the trip
-  // itself on top of whatever's loaded as cargo, so defaulting 糧食 to 100%
-  // of current stock would leave zero headroom for that travel cost and
-  // fail validation the moment the player tried to confirm without first
-  // lowering it — a fixed 50% leaves that headroom automatically (as well
-  // as being a more conservative "don't empty the whole stockpile in one
-  // drag" default for 金屬/晶體 too), while still being a real, useful
-  // starting point rather than another blank 0. Also defaults the transport
-  // count to just enough to carry that amount (capped at how many transport
-  // ships are actually on hand), so the cargo-capacity note starts clean
-  // instead of immediately warning about 0 capacity.
+  // ONLY whatever was actually dragged — every other field is left at
+  // openDashboardRedeployModal()'s normal all-zero default for the player to
+  // fill in themselves, per the user's own confirmed choice.
+  //
+  // - metal/crystal/food: pre-fills that one resource field to HALF of the
+  //   current stock (floored), not the full amount — a redeploy also burns
+  //   some food for the trip itself on top of whatever's loaded as cargo,
+  //   so defaulting 糧食 to 100% of current stock would leave zero headroom
+  //   for that travel cost and fail validation the moment the player tried
+  //   to confirm without first lowering it. A fixed 50% leaves that
+  //   headroom automatically (as well as being a more conservative "don't
+  //   empty the whole stockpile in one drag" default for 金屬/晶體 too).
+  //   Also defaults the transport count to just enough to carry that
+  //   amount (capped at how many transport ships are actually on hand), so
+  //   the cargo-capacity note starts clean instead of immediately warning
+  //   about 0 capacity.
+  // - fleet: pre-fills ALL FOUR ship-count fields to half of each type's
+  //   own home count (same 50% convention, for the same "don't empty
+  //   everything in one drag, but still hand the player a real starting
+  //   point" reasoning) — the whole 艦隊 card covers every ship type at
+  //   once, unlike the single-resource cards, so there's no one field to
+  //   single out. Resource fields stay 0: dragging the fleet card is about
+  //   moving ships, not cargo — a player who also wants to send resources
+  //   can still fill those in by hand, or drag one of the resource cards
+  //   into the SAME already-open modal afterward (dashboardRedeployContext
+  //   stays set until the modal closes, so a second drag just re-fills the
+  //   one new field on top of what's already there).
   function openResourceRedeployModal(originPlanet, destPlanet, resourceType) {
+    dismissDragHint(); // an actual completed drag proves the feature was found
     openDashboardRedeployModal(originPlanet, destPlanet);
+    if (resourceType === 'fleet') {
+      ['mothership', 'scout', 'fighter', 'transport'].forEach(type => {
+        const field = document.getElementById(`dbrd-${type}`);
+        if (!field) return;
+        const home = Number(originPlanet[`${type}_count`]) || 0;
+        field.value = String(Math.floor(home * 0.5));
+      });
+      updateDashboardRedeployCargoEstimate();
+      return;
+    }
     const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
     const field = document.getElementById(fieldId);
     if (!field) return;
@@ -8880,6 +8979,44 @@
     }
     updateDashboardRedeployCargoEstimate();
   }
+
+  // ============================================================
+  // 拖曳移防提示條 (discoverability) — per the user's own explicit worry
+  // ("我也擔心會不會不太直觀,導致玩家不清楚有這個功能"): a cursor:grab and a
+  // small corner glyph (.drag-hint-icon, added to the 4 draggable cards'
+  // markup above) are both easy to never notice on their own, especially
+  // since nothing on this page has ever been draggable before this feature.
+  // This banner spells the feature out in words the first time a
+  // multi-planet account sees this page, and goes away for good — via its
+  // own ✕ button, OR automatically the first time the player actually
+  // completes a drag (see openResourceRedeployModal() above) — whichever
+  // happens first. Persisted in localStorage (same best-effort
+  // try/catch-and-ignore pattern as saveSession()/loadSavedSession(), since
+  // a private window or blocked storage should just mean "the hint shows
+  // again," never a crash) so it stays dismissed across future logins on
+  // this same browser.
+  // ============================================================
+  const DRAG_HINT_DISMISSED_KEY = 'space_mining_drag_hint_dismissed_v1';
+  function isDragHintDismissed() {
+    try { return localStorage.getItem(DRAG_HINT_DISMISSED_KEY) === '1'; } catch (err) { return false; }
+  }
+  function dismissDragHint() {
+    try { localStorage.setItem(DRAG_HINT_DISMISSED_KEY, '1'); } catch (err) { /* best-effort only */ }
+    document.getElementById('drag-hint-banner')?.classList.add('hidden');
+  }
+  // Re-checked from renderPlanetSwitcher() (called on login, every colony
+  // switch, and whenever the owned-planet count changes) — the same trigger
+  // set that function's own doc-comment already relies on for keeping the
+  // tab strip itself in sync, so this piggybacks rather than adding new call
+  // sites. Only ever worth showing once there's actually a second planet to
+  // drag onto (myPlanets.length > 1 — the same gate the tab strip and 移防
+  // pill itself already use).
+  function updateDragHintVisibility() {
+    const banner = document.getElementById('drag-hint-banner');
+    if (!banner) return;
+    banner.classList.toggle('hidden', myPlanets.length <= 1 || isDragHintDismissed());
+  }
+  document.getElementById('drag-hint-dismiss')?.addEventListener('click', dismissDragHint);
 
   // ============================================================
   // Known Planets (已知星球) — a per-player registry (keyed by
