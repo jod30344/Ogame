@@ -1427,6 +1427,7 @@
     <button class="section-nav-item hidden" data-nav-target="attack-section" type="button">攻擊</button>
     <button class="section-nav-item hidden" data-nav-target="transport-section" type="button">運輸</button>
     <button class="section-nav-item hidden" data-nav-target="redeploy-section" type="button">移防</button>
+    <button class="section-nav-item hidden" data-nav-target="ancient-weapons-section" type="button">古代兵器</button>
     <button class="section-nav-item hidden" data-nav-target="movement-log-section" type="button">艦隊動向</button>
     <button class="section-nav-item hidden" data-nav-target="battle-log-section" type="button">戰報</button>
   </div>
@@ -1597,6 +1598,16 @@
         <input type="number" class="ship-input" id="explore-transport-count" min="0" value="0">
         <div class="ship-input-hint hidden" id="explore-transport-hint"></div>
       </div>
+      <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Only weapons at status='home'
+           are listed; the preview line reflects whether this weapon's own
+           specialty (探索) actually matches this form. -->
+      <div class="ship-input-group">
+        <label class="ship-input-label" for="explore-weapon-select">帶兵器</label>
+        <select class="target-input" id="explore-weapon-select">
+          <option value="">不攜帶</option>
+        </select>
+        <div class="ship-input-hint" id="explore-weapon-preview"></div>
+      </div>
       <div class="explore-food-estimate" id="explore-food-estimate"></div>
       <button class="max-btn" id="explore-smart-formation-btn" type="button">智能編隊</button>
       <button class="auto-btn hidden" id="explore-auto-btn" type="button" aria-label="自動探索"></button>
@@ -1630,6 +1641,17 @@
       </select>
       <input type="number" class="ship-input" id="attack-count" min="1" value="1" placeholder="艦數">
       <button class="max-btn" id="attack-max-btn" type="button">全派</button>
+      <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Lives here (not inside
+           #confirm-modal — its body is set via .textContent, so a live
+           control can't sit inside it) and is read in onAttackClick() before
+           the confirm modal opens, then threaded through to executeAttack(). -->
+      <div class="ship-input-group">
+        <label class="ship-input-label" for="attack-weapon-select">帶兵器</label>
+        <select class="target-input" id="attack-weapon-select">
+          <option value="">不攜帶</option>
+        </select>
+        <div class="ship-input-hint" id="attack-weapon-preview"></div>
+      </div>
       <button class="attack-btn" id="attack-btn">發動攻擊</button>
       <div class="attack-msg" id="attack-msg"></div>
     </div>
@@ -1710,9 +1732,27 @@
         </div>
       </div>
       <div class="colonize-cargo-note" id="redeploy-cargo-note"></div>
+      <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Only weapons at status='home'
+           are listed (see renderWeaponSelect()); the preview line updates
+           live as the selection changes (see updateRedeployWeaponPreview()). -->
+      <div class="ship-input-group">
+        <label class="ship-input-label" for="redeploy-weapon-select">帶兵器</label>
+        <select class="target-input" id="redeploy-weapon-select">
+          <option value="">不攜帶</option>
+        </select>
+        <div class="ship-input-hint" id="redeploy-weapon-preview"></div>
+      </div>
       <button class="upgrade" id="redeploy-launch-btn" type="button">派遣移防</button>
       <div class="attack-msg" id="redeploy-msg"></div>
     </div>
+  </div>
+
+  <div id="ancient-weapons-section" class="hidden">
+    <div class="section-label" style="margin-top:30px;">
+      <span>古代兵器</span>
+    </div>
+    <div class="section-note">擊敗遺跡星球可獲得對應兵器的圖紙資格,再透過神殿打造——兵器可攜帶出征,但只有專精的任務類型才會發揮特殊效果</div>
+    <div class="plots-grid" id="ancient-weapons-grid"></div>
   </div>
 
   <div id="movement-log-section" class="hidden">
@@ -1833,6 +1873,17 @@
     // for this version — see homesteadMinOtherBuildings()/
     // everDiscoveredAnyPlanet()/everColonizedAnyPlanet() below.
     homestead:    { name: '拓荒者營地',   resource: null,      baseRates: { metal: 0.4, crystal: 0.25 }, baseCost: { metal: 4000, crystal: 3000 },             baseBuildSeconds: 900, pickable: false },
+    // Homestead LV5 unlock — 古代兵器 (Ancient Weapons)'s capstone building.
+    // Unique per planet, same restriction pattern (hasUniqueBuildingClaimed)
+    // as intel_center/automation_institute above. Produces nothing and never
+    // levels up (see BUILDING_MAX_LEVEL below, capped at 1) — its sole
+    // purpose is to unlock the 古代兵器 crafting UI once it's actually built
+    // (see templeTechUnlocked()/hasUniqueBuildingClaimed('temple') at that
+    // UI's gate). Priced dramatically above automation_institute (this
+    // version's previous most-expensive building, 12000 metal/14000
+    // crystal/380s) — per explicit design, this is meant to feel like a huge,
+    // late-game civilization investment, not just another capstone.
+    temple:       { name: '神殿',         resource: null,      baseCost: { metal: 50000, crystal: 55000 },           baseBuildSeconds: 1800 },
   };
   // First-planet starting stash — intentionally tight: enough for one small
   // building's first level, not both at once. New colonies (from exploration)
@@ -1876,7 +1927,7 @@
   // indefinitely, same as before). Raising a cap here — like
   // MAX_HOMESTEAD_LEVEL — is meant to be a deliberate future-update decision,
   // not something that happens automatically.
-  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 3 };
+  const BUILDING_MAX_LEVEL = { intel_center: 3, automation_institute: 3, temple: 1 };
   function buildingMaxLevel(type) {
     return BUILDING_MAX_LEVEL[type] || Infinity;
   }
@@ -1908,12 +1959,20 @@
   // both are meant to be this version's "endgame tier" content gated behind
   // the current MAX_HOMESTEAD_LEVEL cap.
   const HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL = 4;
-  const MAX_HOMESTEAD_LEVEL = 4;
+  // LV5 — 古代兵器's own capstone building, 神殿, becomes buildable. Gated
+  // behind a hidden milestone (see everDefeatedRuins()) rather than a plain
+  // resource/building-count counter, same "待突破條件 : ???" treatment as
+  // LV2→3/LV3→4 — see renderHomesteadCard()'s targetLevel===5 branch.
+  const HOMESTEAD_TEMPLE_UNLOCK_LEVEL = 5;
+  const MAX_HOMESTEAD_LEVEL = 5;
   function automationTechUnlocked() {
     return homesteadLevel() >= HOMESTEAD_AUTOMATION_UNLOCK_LEVEL;
   }
   function motherShipTechUnlocked() {
     return homesteadLevel() >= HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL;
+  }
+  function templeTechUnlocked() {
+    return homesteadLevel() >= HOMESTEAD_TEMPLE_UNLOCK_LEVEL;
   }
   const FLEET_CAP_BASE = 150;       // combined fighter+transport cap at homestead LV1
   const FLEET_CAP_PER_LEVEL = 150;  // added to the cap per homestead level above 1
@@ -2009,6 +2068,16 @@
   }
   function everColonizedAnyPlanet() {
     return myPlanets.length > 1;
+  }
+  // LV4→5 hidden milestone: has this account ever defeated a 遺跡 (ruins)
+  // planet in combat, ANYWHERE, ever? `ruinsDefeatRows` is a permanent,
+  // account-wide, never-deleted registry (see loadRuinsDefeats() / the
+  // ruins_defeats table) — one row per weapon this player has ever unlocked
+  // the blueprint for — so "has at least one row" is inherently a permanent
+  // signal, same shape as everDiscoveredAnyPlanet()/everColonizedAnyPlanet()
+  // above.
+  function everDefeatedRuins() {
+    return ruinsDefeatRows.length > 0;
   }
   // Progressive disclosure: nothing fleet-related exists in the player's world
   // until the Homestead Camp reaches the level that unlocks shipyard
@@ -2335,6 +2404,16 @@
     // intel. 移防 itself is account-internal and was deliberately NOT gated
     // on intel above, so the log that shows it shouldn't be either.
     const movementLogVisible = intelSectionsVisible || redeployVisible;
+    // 古代兵器 crafting UI — gated on the building's actual PRESENCE on this
+    // planet (hasUniqueBuildingClaimed('temple'), same per-planet scope that
+    // function already uses for intel_center/automation_institute — see its
+    // own declaration comment), not merely on the tech LEVEL that makes it
+    // pickable (templeTechUnlocked()). Matches how every other unique-
+    // building-gated UI already works: 探索 needs hasIntelCenter() (an
+    // actually-standing intel_center), not just fleetTechUnlocked().
+    const ancientWeaponsVisible = templeTechUnlocked() && hasUniqueBuildingClaimed('temple');
+    document.getElementById('ancient-weapons-section')?.classList.toggle('hidden', !ancientWeaponsVisible);
+    if (ancientWeaponsVisible) renderAncientWeapons();
     // 總覽 (account-wide dashboard) — per the user's own explicit request,
     // tied to 戰情中心 the same account-wide way as 已知星球/艦隊動向/戰報
     // above, but deliberately WITHOUT also requiring `known` (hasAnyKnownPlanet())
@@ -2430,6 +2509,7 @@
     intel_center: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><path d="M12 12L18 7"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/></svg>',
     turret: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21h10"/><path d="M9 21v-5h6v5"/><rect x="7" y="10" width="10" height="6" rx="1"/><path d="M12 10V5"/><path d="M12 5l4-2M12 5l-4-2"/></svg>',
     automation_institute: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.4M12 18.6V21M21 12h-2.4M5.4 12H3M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7M18.4 18.4l-1.7-1.7M7.3 7.3L5.6 5.6"/></svg>',
+    temple: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l8-6 8 6"/><path d="M4 10v10M20 10v10M4 20h16"/><path d="M7 10v10M11 10v10M13 10v10M17 10v10"/></svg>',
   };
   const SHIP_ICONS = {
     fighter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.2 8.2H20l-5.8 4 2.2 7.8L12 17l-4.4 5 2.2-7.8L4 10.2h5.8z"/></svg>',
@@ -2529,6 +2609,16 @@
     // maybeLaunchNpcRaids() below), unlike every other archetype which only
     // ever turns hostile in reaction to the player attacking it first.
     pirate:  { name: '海盜', initialFriendliness: -100 },
+    // 遺跡 (ruins) planets — see 古代兵器 (Ancient Weapons) feature. Listed
+    // here purely so any generic archetype-name/friendliness lookup (e.g.
+    // renderKnownPlanets()'s display line) resolves sensibly, but ruins
+    // deliberately have NO real reputation mechanic at all: discovering one
+    // never calls ensureNpcReputation() (see resolveOneExploration()), and
+    // attacking one never calls setNpcHostile() (see executeAttack()) — a
+    // ruins planet is always, unconditionally hostile/attack-only, and never
+    // gets an actual npc_reputation row written for it. initialFriendliness
+    // here is only ever read as a display fallback, never persisted.
+    ruins:   { name: '遺跡', initialFriendliness: -100 },
   };
   // -100..100 scale. At or below this, an NPC is 敵對 (hostile): no 商貿
   // offered, and it may periodically raid the player (see
@@ -2542,6 +2632,182 @@
   // hostile line — doesn't unlock or change any mechanic this round.
   const FRIENDLY_FRIENDLINESS_THRESHOLD = 30;
   const NPC_MAX_FRIENDLINESS = 100;
+
+  // ============================================================
+  // 古代兵器 (Ancient Weapons) — 8 named weapons, bare god names per explicit
+  // user instruction ("兵器就直接用神祇的名稱就好，像宙斯之槌就直接叫宙斯就好").
+  // Each specializes in exactly one mission type (`missionType`), but per
+  // explicit design a crafted weapon can be BROUGHT ALONG on any of the 3
+  // mission types (探索/攻擊/移防) — its `effect` only actually applies when
+  // the mission it's brought on matches its own `missionType`; brought on a
+  // mismatched mission type it still travels along and still always returns
+  // home safely (see every resolve*() function's unconditional
+  // "PATCH ancient_weapons back to home" step), it just produces no
+  // mechanical effect that trip. See weaponEffectAppliesTo()/
+  // weaponEffectPreviewText() below for the shared UI-preview logic threaded
+  // through all 3 mission forms.
+  // ============================================================
+  const ANCIENT_WEAPONS = {
+    poseidon: { name: '波賽頓', missionType: 'explore', effectDesc: '本次探索保證無任何艦隊戰損', effect: 'no_attrition' },
+    apollo:   { name: '阿波羅', missionType: 'explore', effectDesc: '本次探索必定觸發重大發現（不會撲空）', effect: 'guaranteed_rare' },
+    artemis:  { name: '阿蒂蜜絲', missionType: 'explore', effectDesc: '本次探索所需時間減半', effect: 'half_duration' },
+    zeus:     { name: '宙斯', missionType: 'attack', effectDesc: '本次攻擊無視敵方防空炮塔戰力', effect: 'ignore_turret' },
+    athena:   { name: '雅典娜', missionType: 'attack', effectDesc: '本次攻擊己方戰鬥機損耗降低 50%', effect: 'half_losses' },
+    hades:    { name: '黑帝斯', missionType: 'attack', effectDesc: '本次攻擊掠奪資源比例提升至 40%（原 20%）', effect: 'double_plunder' },
+    demeter:  { name: '狄蜜特', missionType: 'redeploy', effectDesc: '本次移防運輸艦載貨量提升 100%', effect: 'double_cargo' },
+    hermes:   { name: '荷米斯', missionType: 'redeploy', effectDesc: '本次移防到達時間大幅縮短', effect: 'fast_travel' },
+  };
+  // 巨額資源與時間 — deliberately priced/timed above any single existing
+  // building cost (神殿 itself, this version's most expensive building,
+  // costs 50000 metal / 55000 crystal to BUILD once — crafting a single
+  // weapon on top of that is 60000/55000/10000, plus 45 minutes, per weapon).
+  const ANCIENT_WEAPON_CRAFT_COST = { metal: 60000, crystal: 55000, food: 10000 };
+  const ANCIENT_WEAPON_CRAFT_SECONDS = 2700;
+  // A weapon's effect only applies when the mission it's brought on matches
+  // the weapon's own specialty — otherwise it's "along for the ride" only.
+  function weaponEffectAppliesTo(weaponKey, missionType) {
+    const def = ANCIENT_WEAPONS[weaponKey];
+    return !!def && def.missionType === missionType;
+  }
+  // Shared live-preview line for all 3 "帶兵器" selectors — shows the real
+  // effect when it would actually apply this trip, or a generic "along for
+  // the ride, no effect" note when the weapon's specialty doesn't match the
+  // form it's currently sitting in.
+  function weaponEffectPreviewText(weaponKey, missionType) {
+    if (!weaponKey) return '';
+    const def = ANCIENT_WEAPONS[weaponKey];
+    if (!def) return '';
+    if (weaponEffectAppliesTo(weaponKey, missionType)) return `效果:${def.effectDesc}`;
+    const missionTypeLabel = { explore: '探索', attack: '攻擊', redeploy: '移防' }[def.missionType] || def.missionType;
+    return `（此兵器專精於${missionTypeLabel}任務，本次任務不會產生特殊效果）`;
+  }
+  // Only weapons currently AT HOME (status='home') can be brought on a new
+  // mission — one still crafting or already away can't be double-booked.
+  function homeAncientWeapons() {
+    return ancientWeaponRows.filter(w => w.status === 'home');
+  }
+  // Refreshes all 3 "帶兵器" <select> options from the live homeAncientWeapons()
+  // list, preserving whatever the player currently has selected if it's still
+  // valid (falls back to "不攜帶" otherwise — e.g. the weapon they had picked
+  // just got launched on another form, or came back and left again). Called
+  // once from loadAncientWeapons() every poll cycle, same refresh cadence as
+  // every other player_name-scoped loader in this file.
+  function populateWeaponSelects() {
+    const homeWeapons = homeAncientWeapons();
+    [
+      { selectId: 'explore-weapon-select', previewId: 'explore-weapon-preview', missionType: 'explore' },
+      { selectId: 'attack-weapon-select', previewId: 'attack-weapon-preview', missionType: 'attack' },
+      { selectId: 'redeploy-weapon-select', previewId: 'redeploy-weapon-preview', missionType: 'redeploy' },
+    ].forEach(({ selectId, previewId, missionType }) => {
+      const select = document.getElementById(selectId);
+      if (!select) return;
+      const current = select.value;
+      const optionsHtml = homeWeapons.map(w => {
+        const def = ANCIENT_WEAPONS[w.weapon_key];
+        return `<option value="${w.weapon_key}">${def ? def.name : w.weapon_key}</option>`;
+      }).join('');
+      select.innerHTML = '<option value="">不攜帶</option>' + optionsHtml;
+      select.value = homeWeapons.some(w => w.weapon_key === current) ? current : '';
+      updateWeaponPreview(selectId, previewId, missionType);
+    });
+  }
+  function updateWeaponPreview(selectId, previewId, missionType) {
+    const select = document.getElementById(selectId);
+    const preview = document.getElementById(previewId);
+    if (!select || !preview) return;
+    preview.textContent = weaponEffectPreviewText(select.value, missionType);
+  }
+
+  // ============================================================
+  // 古代兵器 crafting UI — gated on templeTechUnlocked() &&
+  // hasUniqueBuildingClaimed('temple') (see updateActionSectionVisibility()).
+  // Reuses the existing plot-card visual language (`.plots-grid`/`.plot-card`/
+  // `.plot-detail`) rather than introducing new CSS, per the design note.
+  // ============================================================
+  function renderAncientWeapons() {
+    const grid = document.getElementById('ancient-weapons-grid');
+    if (!grid) return;
+    grid.innerHTML = Object.keys(ANCIENT_WEAPONS).map(weaponKey => {
+      const def = ANCIENT_WEAPONS[weaponKey];
+      const missionTypeLabel = { explore: '探索', attack: '攻擊', redeploy: '移防' }[def.missionType] || def.missionType;
+      const defeated = ruinsDefeatRows.some(r => r.weapon_key === weaponKey);
+      const weaponRow = ancientWeaponRows.find(w => w.weapon_key === weaponKey);
+      let bodyHtml;
+      if (!defeated) {
+        bodyHtml = `<div class="plot-detail unmet">尚未取得圖紙(需先擊敗對應遺跡星球)</div>
+          <div class="plot-detail">專精:${missionTypeLabel} · ${def.effectDesc}</div>`;
+      } else if (!weaponRow) {
+        const cost = ANCIENT_WEAPON_CRAFT_COST;
+        const affordable = localMetal >= cost.metal && localCrystal >= cost.crystal && localFood >= cost.food;
+        bodyHtml = `<div class="plot-detail">專精:${missionTypeLabel} · ${def.effectDesc}</div>
+          <div class="plot-detail">打造費用:${fmt(cost.metal)} 金屬 · ${fmt(cost.crystal)} 晶體 · ${fmt(cost.food)} 糧食 · ${formatDuration(ANCIENT_WEAPON_CRAFT_SECONDS)}</div>
+          <button class="upgrade" data-craft-weapon="${weaponKey}" ${affordable ? '' : 'disabled'}>打造</button>`;
+      } else if (weaponRow.status === 'crafting') {
+        const remaining = Math.max(0, (new Date(weaponRow.craft_complete_at).getTime() - Date.now()) / 1000);
+        bodyHtml = `<div class="plot-detail">打造中,預計 ${formatDuration(remaining)} 後完成</div>`;
+      } else if (weaponRow.status === 'home') {
+        const homePlanet = myPlanets.find(p => String(p.id) === String(weaponRow.home_planet_id));
+        const planetLabel = homePlanet ? (homePlanet.nickname || `座標 ${homePlanet.coord}`) : '未知星球';
+        bodyHtml = `<div class="plot-detail">駐留於:${planetLabel}</div>
+          <div class="plot-detail">專精:${missionTypeLabel} · ${def.effectDesc}</div>`;
+      } else {
+        bodyHtml = `<div class="plot-detail">出征中</div>
+          <div class="plot-detail">專精:${missionTypeLabel} · ${def.effectDesc}</div>`;
+      }
+      return `<div class="plot-card${defeated ? '' : ' empty'}">
+        <div class="plot-label">${def.name}</div>
+        <div class="plot-head">
+          <div class="plot-name-row"><span class="plot-name">${def.name}</span></div>
+        </div>
+        ${bodyHtml}
+      </div>`;
+    }).join('');
+    grid.querySelectorAll('[data-craft-weapon]').forEach(btn => {
+      btn.addEventListener('click', () => craftAncientWeapon(btn.dataset.craftWeapon, btn));
+    });
+  }
+
+  async function craftAncientWeapon(weaponKey, btn) {
+    if (!planet || !ANCIENT_WEAPONS[weaponKey]) return;
+    if (!ruinsDefeatRows.some(r => r.weapon_key === weaponKey)) return;
+    if (ancientWeaponRows.some(w => w.weapon_key === weaponKey)) return; // already crafted/crafting
+    const cost = ANCIENT_WEAPON_CRAFT_COST;
+    if (localMetal < cost.metal || localCrystal < cost.crystal || localFood < cost.food) return;
+
+    if (btn) btn.disabled = true;
+    // Same deduct-then-POST pattern as queueConstruction() — deduct from the
+    // CURRENT PLANET's resources.
+    localMetal -= cost.metal;
+    localCrystal -= cost.crystal;
+    localFood -= cost.food;
+    renderResources();
+    flashResource('metal-value', 'danger');
+    flashResource('crystal-value', 'danger');
+    flashResource('food-value', 'danger');
+    await saveToServer();
+
+    const now = new Date();
+    const completeAt = new Date(now.getTime() + ANCIENT_WEAPON_CRAFT_SECONDS * 1000);
+    try {
+      const created = await restRequest('ancient_weapons', {
+        method: 'POST',
+        body: JSON.stringify({
+          player_name: planet.player_name,
+          weapon_key: weaponKey,
+          status: 'crafting',
+          home_planet_id: planet.id,
+          craft_started_at: now.toISOString(),
+          craft_complete_at: completeAt.toISOString(),
+        }),
+      });
+      if (created && created[0]) ancientWeaponRows.push(created[0]);
+      showToast(`開始打造古代兵器「${ANCIENT_WEAPONS[weaponKey].name}」,預計 ${formatDuration(ANCIENT_WEAPON_CRAFT_SECONDS)} 後完成`, 'success', 8000);
+      renderAncientWeapons();
+    } catch (err) {
+      console.error('Craft ancient weapon error:', err);
+      if (btn) btn.disabled = false;
+    }
+  }
 
   // 商貿 (Commerce/Trade): per explicit user request, a genuinely TWO-WAY
   // exchange — giving 糧食 returns some 金屬/晶體 too, not just friendliness
@@ -2726,6 +2992,14 @@
       '偵測到規律卻陌生的能量波動,那裡棲息著一支不屬於任何已知玩家的勢力。',
       '導航系統標出一處異常座標,靠近後才發現早已有其他居民定居於此。',
     ],
+    // 遺跡 (ruins) — a distinct discovery flavor for 古代兵器's own NPC
+    // sub-archetype, per explicit user request for an evocative dedicated
+    // message rather than reusing the generic 'npc' pool.
+    ruins: [
+      '艦隊發現了一座沉睡的古代遺跡……內部似乎封印著失落的兵器。',
+      '感測器捕捉到一股遠古而強大的能量殘響,座標指向一座早已荒廢的遺跡。',
+      '導航系統回報一處異常密度讀數——那是一座沉睡千年的古代遺跡。',
+    ],
   };
 
   // Demolishing refunds nothing but is cheaper/faster than the build it undoes —
@@ -2880,6 +3154,8 @@
   let redeployRows = [];       // in-flight (unresolved) 移防 missions launched from this planet
   let npcPlanetRows = [];      // ALL NPC `planets` rows (is_npc=true) — small table, refreshed whole each poll
   let npcReputationRows = [];  // this player's own npc_reputation rows (player-wide, not per-planet)
+  let ruinsDefeatRows = [];    // this player's permanent ruins_defeats rows (player-wide, not per-planet)
+  let ancientWeaponRows = [];  // this player's ancient_weapons rows, one per weapon ever crafted (player-wide)
 
   // BUG FIX (reported by the user via a screenshot showing 總數 705/600 with
   // several ship-production orders actively building/queued despite the
@@ -4240,6 +4516,14 @@
     await resolveArrivedRedeployments();
     await loadRedeployMissions();
     await loadPendingTransportRequests();
+    // 古代兵器 — ruinsDefeatRows gates the LV4→5 homestead milestone/temple
+    // picker option, ancientWeaponRows drives the crafting UI; both are
+    // player-wide, cheap, small tables, loaded every cycle same as
+    // loadNpcData()/loadKnownPlanets() above. The craft-completion poller
+    // needs ancientWeaponRows freshly loaded first.
+    await loadRuinsDefeats();
+    await loadAncientWeapons();
+    await resolveAncientWeaponCrafts();
     // Every loader currentFleetTotal() depends on (loadFleetMovements,
     // loadExplorationData, loadColonizationMissions, loadShipQueue,
     // loadRedeployMissions) has now
@@ -4966,6 +5250,11 @@
           showToast('還需要先完成一次對空星球的殖民,才能升級拓荒者營地', 'danger');
           return;
         }
+      } else if (targetLevel === 5) {
+        if (!everDefeatedRuins()) {
+          showToast('還需要先擊敗一座遺跡星球,才能升級拓荒者營地', 'danger');
+          return;
+        }
       }
     }
 
@@ -5338,6 +5627,16 @@
       reqLine = requirementMet
         ? `<div class="plot-detail">已完成星球殖民 ✓</div>`
         : `<div class="plot-detail unmet">待突破條件 : ???</div>`;
+    } else if (targetLevel === 5) {
+      // Hidden LV4→5 milestone, same "待突破條件 : ???" treatment as
+      // LV2→3/LV3→4 — the account must have defeated at least one 遺跡
+      // (ruins) planet, ever, anywhere (see everDefeatedRuins()). Narratively:
+      // LV5 unlocks 神殿, so reaching it requires having proven the account
+      // can actually take down one of the ancient guardians first.
+      requirementMet = everDefeatedRuins();
+      reqLine = requirementMet
+        ? `<div class="plot-detail">已擊敗遺跡守衛 ✓</div>`
+        : `<div class="plot-detail unmet">待突破條件 : ???</div>`;
     } else {
       requirementMet = true;
       reqLine = '';
@@ -5475,6 +5774,8 @@
           if (building.level >= 2) automationUnlocks.push('自動建築升級');
           if (building.level >= 3) automationUnlocks.push('自動探索');
           effectLine = `已解鎖:${automationUnlocks.join('、')}`;
+        } else if (building.building_type === 'temple') {
+          effectLine = `已解鎖:古代兵器打造`;
         } else {
           effectLine = `目前產量 +${miningRate(building.building_type, building.level, def.resource).toFixed(1)} / 秒`;
         }
@@ -5537,6 +5838,10 @@
             // Automation institute is capped at one per planet, same pattern
             // as the intel center — its LEVEL is what matters.
             if (type === 'automation_institute') return automationTechUnlocked() && !hasUniqueBuildingClaimed('automation_institute');
+            // 神殿 (Temple) — 古代兵器's capstone, same "capped, tech-gated,
+            // disappears once claimed" pattern as intel_center/
+            // automation_institute above.
+            if (type === 'temple') return templeTechUnlocked() && !hasUniqueBuildingClaimed('temple');
             return true;
           })
           .map(type => {
@@ -6213,6 +6518,7 @@
   document.getElementById('attack-max-btn').addEventListener('click', () => {
     document.getElementById('attack-count').value = Math.max(1, planet ? planet.fighter_count : 1);
   });
+  document.getElementById('attack-weapon-select')?.addEventListener('change', () => updateWeaponPreview('attack-weapon-select', 'attack-weapon-preview', 'attack'));
 
   // Generic confirm modal, reused by both attack and demolish.
   let pendingConfirmAction = null;
@@ -6235,11 +6541,16 @@
     if (shipsSentInput > planet.fighter_count) { msg.textContent = `你只有 ${planet.fighter_count} 艘戰鬥機`; return; }
     if (targetName === planet.player_name) { msg.textContent = '不能攻擊自己'; return; }
 
+    // 帶兵器 — read here (not inside #confirm-modal, whose body is set via
+    // .textContent so a live control can't sit inside it) and threaded
+    // through the confirm closure into executeAttack().
+    const weaponKey = document.getElementById('attack-weapon-select')?.value || null;
+    const weaponNote = weaponKey && ANCIENT_WEAPONS[weaponKey] ? `,攜帶古代兵器「${ANCIENT_WEAPONS[weaponKey].name}」` : '';
     openConfirmModal(
       '確認攻擊',
-      `確定要派出 ${shipsSentInput} 艘戰鬥機攻擊「${targetName}」嗎？出發後仍可在航程過半前中途召回。`,
+      `確定要派出 ${shipsSentInput} 艘戰鬥機攻擊「${targetName}」${weaponNote}嗎？出發後仍可在航程過半前中途召回。`,
       '派出艦隊',
-      executeAttack
+      () => executeAttack(weaponKey)
     );
   }
 
@@ -6272,7 +6583,7 @@
     }
   });
 
-  async function executeAttack() {
+  async function executeAttack(weaponKey) {
     const targetName = document.getElementById('target-name').value.trim();
     const shipsSentInput = parseInt(document.getElementById('attack-count').value, 10);
     const msg = document.getElementById('attack-msg');
@@ -6320,7 +6631,11 @@
       // player chooses to attack). Pirates are already permanently at the
       // hostile floor, so this is a no-op for them either way.
       let justTurnedHostile = false;
-      if (defenderPlanet.is_npc) {
+      // 遺跡 planets never get a real npc_reputation row — always-hostile,
+      // attack-only, no reputation mechanic at all (see NPC_ARCHETYPES.ruins'
+      // own comment) — so skip setNpcHostile() for them entirely, same as
+      // every other NPC branch below skips it for a planet that isn't an NPC.
+      if (defenderPlanet.is_npc && defenderPlanet.npc_archetype !== 'ruins') {
         justTurnedHostile = await setNpcHostile(defenderPlanet);
       }
 
@@ -6343,8 +6658,22 @@
           launch_time: launchTime.toISOString(),
           arrival_time: arrivalTime.toISOString(),
           resolved: false,
+          weapon_key: weaponKey || null,
         }),
       });
+      // Book the selected weapon onto this mission — conditional on
+      // status=eq.home to avoid double-booking, same pattern as
+      // launchExploration().
+      if (weaponKey) {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(planet.player_name)}&weapon_key=eq.${encodeURIComponent(weaponKey)}&status=eq.home`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'on_mission' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === weaponKey);
+        if (w) w.status = 'on_mission';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      }
 
       const hostileNote = justTurnedHostile ? `(此舉已讓「${defenderPlanet.player_name}」視你為敵人,牠可能會反擊)` : '';
       msg.textContent = `艦隊已出發,距離 ${Math.abs(planet.coord - defenderPlanet.coord)},預計 ${formatDuration(travelSec)} 後抵達${hostileNote}`;
@@ -6462,20 +6791,29 @@
     // total power is absorbed against the attacker's power FIRST — only
     // whatever gets through then faces the defender's existing fighters.
     const defenderTurretRows = await restRequest(`buildings?planet_id=eq.${defenderPlanet.id}&building_type=eq.turret&select=level`);
-    const turretPowerTotal = (defenderTurretRows || []).reduce((sum, b) => sum + turretPower(b.level), 0);
+    // Zeus' ignore_turret effect: treat the defender's total turret power as
+    // 0 for THIS mission only — never mutates turretPower() or the
+    // defender's real turret levels.
+    const zeusIgnoresTurrets = !!(mission.weapon_key && weaponEffectAppliesTo(mission.weapon_key, 'attack') && ANCIENT_WEAPONS[mission.weapon_key].effect === 'ignore_turret');
+    const turretPowerTotal = zeusIgnoresTurrets ? 0 : (defenderTurretRows || []).reduce((sum, b) => sum + turretPower(b.level), 0);
 
     const A = mission.ships_sent;
     const effectiveA = Math.max(0, A - turretPowerTotal);
     const D = defenderPlanet.fighter_count;
     const defenderRes = await currentResourcesOfPlanet(defenderPlanet);
 
+    // Hades' double_plunder effect: STEAL_FRACTION*2 for THIS mission only —
+    // never mutates the shared STEAL_FRACTION constant other missions read.
+    const hadesDoublesPlunder = !!(mission.weapon_key && weaponEffectAppliesTo(mission.weapon_key, 'attack') && ANCIENT_WEAPONS[mission.weapon_key].effect === 'double_plunder');
+    const stealFraction = hadesDoublesPlunder ? STEAL_FRACTION * 2 : STEAL_FRACTION;
+
     let attackerSurvivors, defenderRemaining, result, metalStolen = 0, crystalStolen = 0;
     if (effectiveA > D) {
       result = 'attacker_win';
       attackerSurvivors = effectiveA - D;
       defenderRemaining = 0;
-      metalStolen = Math.round(defenderRes.metal * STEAL_FRACTION);
-      crystalStolen = Math.round(defenderRes.crystal * STEAL_FRACTION);
+      metalStolen = Math.round(defenderRes.metal * stealFraction);
+      crystalStolen = Math.round(defenderRes.crystal * stealFraction);
     } else if (effectiveA < D) {
       result = 'defender_win';
       attackerSurvivors = 0;
@@ -6484,6 +6822,16 @@
       result = 'draw';
       attackerSurvivors = 0;
       defenderRemaining = 0;
+    }
+    // Athena's half_losses effect: reduce the ATTACKER's own fighter losses
+    // by 50% (round down) versus what normal combat resolution would have
+    // inflicted, regardless of win/lose/draw — defenderRemaining (the
+    // DEFENDER's own losses) is deliberately untouched.
+    const athenaHalvesLosses = !!(mission.weapon_key && weaponEffectAppliesTo(mission.weapon_key, 'attack') && ANCIENT_WEAPONS[mission.weapon_key].effect === 'half_losses');
+    if (athenaHalvesLosses) {
+      const normalLoss = A - attackerSurvivors;
+      const halvedLoss = Math.floor(normalLoss / 2);
+      attackerSurvivors = A - halvedLoss;
     }
 
     await restRequest(`planets?id=eq.${attackerPlanet.id}`, {
@@ -6517,6 +6865,33 @@
       }),
     });
 
+    // 遺跡 defeat → permanent blueprint eligibility. Upserted unconditionally
+    // (regardless of which side's client happens to resolve this mission —
+    // an NPC never polls, so it's always the attacker's own client), using
+    // on_conflict=player_name,weapon_key + resolution=ignore-duplicates so
+    // re-defeating an already-defeated ruins is idempotent (does nothing
+    // new). The toast crediting the unlock only shows to the attacker
+    // (below, inside their own viewer branch) since that's who earned it.
+    let ruinsWeaponUnlocked = null;
+    if (result === 'attacker_win' && (defenderPlanet.npc_archetype === 'ruins' || defenderPlanet.is_ruins) && defenderPlanet.ruins_weapon_key) {
+      try {
+        await restRequest(`ruins_defeats?on_conflict=player_name,weapon_key`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=ignore-duplicates' },
+          body: JSON.stringify({
+            player_name: mission.attacker_name,
+            weapon_key: defenderPlanet.ruins_weapon_key,
+          }),
+        });
+        ruinsWeaponUnlocked = defenderPlanet.ruins_weapon_key;
+        if (planet && planet.player_name === mission.attacker_name && !ruinsDefeatRows.some(r => r.weapon_key === ruinsWeaponUnlocked)) {
+          ruinsDefeatRows.push({ player_name: mission.attacker_name, weapon_key: ruinsWeaponUnlocked });
+        }
+      } catch (err) {
+        console.error('Ruins defeat upsert error:', err);
+      }
+    }
+
     // Compare by exact planet id, not just account name — the viewer might
     // currently be looking at a different one of their own colonies.
     if (planet && String(planet.id) === String(attackerPlanet.id)) {
@@ -6528,6 +6903,10 @@
         showToast(`勝利！擊敗 ${mission.defender_name}，搶得 ${fmt(metalStolen)} 金屬 · ${fmt(crystalStolen)} 晶體`, 'success');
         flashResource('metal-value', 'success');
         flashResource('crystal-value', 'success');
+        if (ruinsWeaponUnlocked) {
+          const weaponDef = ANCIENT_WEAPONS[ruinsWeaponUnlocked];
+          showToast(`你擊敗了遺跡守衛，獲得了打造「${weaponDef ? weaponDef.name : ruinsWeaponUnlocked}」的圖紙資格！`, 'success', 10000);
+        }
       } else if (result === 'defender_win') {
         showToast(`戰敗！攻擊 ${mission.defender_name} 的艦隊全滅`, 'danger');
       } else {
@@ -6551,6 +6930,25 @@
       }
       flashResource('fighter-count', result === 'attacker_win' ? 'danger' : 'success');
     }
+    // Weapons are never destroyed and always return home regardless of the
+    // mission's outcome (win/lose/draw) — this PATCH is deliberately
+    // unconditional and independent of everything above. Only the attacker
+    // ever brings a weapon on an attack mission (defenders/NPCs never do),
+    // so this always resolves against the attacker's own row.
+    if (mission.weapon_key) {
+      try {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(mission.attacker_name)}&weapon_key=eq.${encodeURIComponent(mission.weapon_key)}&status=eq.on_mission`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === mission.weapon_key);
+        if (w) w.status = 'home';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      } catch (err) {
+        console.error('Return ancient weapon (attack) error:', err);
+      }
+    }
   }
 
   // ============================================================
@@ -6571,6 +6969,64 @@
     } catch (err) {
       console.error('Load NPC data error:', err);
     }
+  }
+
+  // ============================================================
+  // 古代兵器 (Ancient Weapons) — loaders. Same "player_name-scoped GET ->
+  // assign -> re-render" shape as loadKnownPlanets()/loadNpcData() above.
+  // Both ruinsDefeatRows and ancientWeaponRows are player-wide (not
+  // per-planet), same as knownPlanetRows/npcReputationRows.
+  // ============================================================
+  async function loadRuinsDefeats() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(`ruins_defeats?player_name=eq.${encodeURIComponent(planet.player_name)}&select=*`);
+      ruinsDefeatRows = rows || [];
+      renderAncientWeapons();
+    } catch (err) {
+      console.error('Load ruins defeats error:', err);
+    }
+  }
+  async function loadAncientWeapons() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(`ancient_weapons?player_name=eq.${encodeURIComponent(planet.player_name)}&select=*`);
+      ancientWeaponRows = rows || [];
+      renderAncientWeapons();
+      populateWeaponSelects();
+    } catch (err) {
+      console.error('Load ancient weapons error:', err);
+    }
+  }
+  // Craft-completion poller — mirrors how resolveAndAdvanceConstruction()
+  // flips a construction_queue row from 'building' to done once its
+  // complete_at has passed, but far simpler: no queueing/ordering, no
+  // claim-race concern (only the owning player's own client ever touches
+  // their own ancient_weapons rows), so a plain conditional PATCH
+  // (`status=eq.crafting`) is enough — same safe-conditional-PATCH pattern
+  // every mission resolve function already uses for its own idempotency.
+  async function resolveAncientWeaponCrafts() {
+    if (!planet) return;
+    const nowMs = Date.now();
+    for (const w of ancientWeaponRows) {
+      if (w.status !== 'crafting') continue;
+      if (new Date(w.craft_complete_at).getTime() > nowMs) continue;
+      try {
+        const updated = await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(w.player_name)}&weapon_key=eq.${encodeURIComponent(w.weapon_key)}&status=eq.crafting`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
+        );
+        if (updated && updated.length > 0) {
+          w.status = 'home';
+          const weaponDef = ANCIENT_WEAPONS[w.weapon_key];
+          showToast(`古代兵器「${weaponDef ? weaponDef.name : w.weapon_key}」打造完成！`, 'success', 8000);
+        }
+      } catch (err) {
+        console.error('Resolve ancient weapon craft error:', err);
+      }
+    }
+    renderAncientWeapons();
+    populateWeaponSelects();
   }
 
   // Called the first time a player discovers a given NPC (via exploration or
@@ -7459,6 +7915,7 @@
   document.getElementById('explore-auto-btn').addEventListener('click', (e) => toggleAutoExplore(e.currentTarget));
 
   document.getElementById('explore-launch-btn').addEventListener('click', onExploreClick);
+  document.getElementById('explore-weapon-select')?.addEventListener('change', () => updateWeaponPreview('explore-weapon-select', 'explore-weapon-preview', 'explore'));
 
   function onExploreClick() {
     if (!planet) return;
@@ -7499,11 +7956,13 @@
     const foodCost = missionFoodCost({ scout: scoutCount, fighter: fighterCount, transport: transportCount }, tier.seconds);
     if (foodCost > localFood) { msg.textContent = `糧食不足,此次任務需要 ${foodCost} 糧食(現有 ${Math.floor(localFood)})`; return; }
     const transportNote = transportCount > 0 ? '' : '(未帶運輸艦,即使有發現也無法帶回任何戰利品)';
+    const weaponKey = document.getElementById('explore-weapon-select')?.value || null;
+    const weaponNote = weaponKey && ANCIENT_WEAPONS[weaponKey] ? `,攜帶古代兵器「${ANCIENT_WEAPONS[weaponKey].name}」` : '';
     openConfirmModal(
       '確認派遣探索',
-      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)}),需消耗 ${foodCost} 糧食。${transportNote}出發後仍可在航程過半前中途召回。`,
+      `派出 ${scoutCount} 艘偵察機 · ${fighterCount} 艘戰鬥機 · ${transportCount} 艘運輸艦,展開「${tier.name}」(${formatDuration(tier.seconds)}),需消耗 ${foodCost} 糧食${weaponNote}。${transportNote}出發後仍可在航程過半前中途召回。`,
       '派遣',
-      () => launchExploration(scoutCount, fighterCount, transportCount)
+      () => launchExploration(scoutCount, fighterCount, transportCount, null, weaponKey)
     );
   }
 
@@ -7514,12 +7973,22 @@
   // the player currently has highlighted in the picker. Every other existing
   // call site (onExploreClick()) omits it and keeps reading the live picker
   // selection exactly as before.
-  async function launchExploration(scoutCount, fighterCount, transportCount, tierOverride) {
+  async function launchExploration(scoutCount, fighterCount, transportCount, tierOverride, weaponKey) {
     const msg = document.getElementById('explore-msg');
     const tierKey = tierOverride || selectedExplorationTier;
     const tier = EXPLORATION_TIERS[tierKey];
     const launchTime = new Date();
-    const arrivalTime = new Date(launchTime.getTime() + tier.seconds * 1000);
+    // Artemis' half_duration effect must take effect at LAUNCH time — the
+    // duration is fixed the moment this mission row is created, not at
+    // resolve (there's no "duration" field to retroactively shrink once
+    // arrival_time is written). Only applies when Artemis itself is the
+    // weapon brought (her own specialty is 探索) — see
+    // weaponEffectAppliesTo().
+    let seconds = tier.seconds;
+    if (weaponKey && weaponEffectAppliesTo(weaponKey, 'explore') && ANCIENT_WEAPONS[weaponKey].effect === 'half_duration') {
+      seconds = Math.round(seconds / 2);
+    }
+    const arrivalTime = new Date(launchTime.getTime() + seconds * 1000);
 
     planet.scout_count = (planet.scout_count || 0) - scoutCount;
     planet.fighter_count -= fighterCount;
@@ -7545,9 +8014,23 @@
           launch_time: launchTime.toISOString(),
           arrival_time: arrivalTime.toISOString(),
           resolved: false,
+          weapon_key: weaponKey || null,
         }),
       });
-      msg.textContent = `探索艦隊已出發,預計 ${formatDuration(tier.seconds)} 後返航`;
+      // A weapon selected here is booked onto this mission — conditional on
+      // status=eq.home to avoid double-booking (same safe conditional-PATCH
+      // pattern as every mission resolve function's own claim step).
+      if (weaponKey) {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(planet.player_name)}&weapon_key=eq.${encodeURIComponent(weaponKey)}&status=eq.home`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'on_mission' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === weaponKey);
+        if (w) w.status = 'on_mission';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      }
+      msg.textContent = `探索艦隊已出發,預計 ${formatDuration(seconds)} 後返航`;
       await loadExplorationData();
     } catch (err) {
       console.error('Launch exploration error:', err);
@@ -7684,7 +8167,14 @@
     let foundCoord = null;
     let foundType = null;
     let foundPlayerName = null;
-    if (Math.random() < rareChance) {
+    let isRuinsDiscovery = false;
+    // Apollo's guaranteed_rare effect: force this mission's outcome to land
+    // on a "real" discovery rather than 'empty' — i.e. bypass the normal
+    // empty/rare-chance gate so it behaves as if the rare roll succeeded.
+    // Narrowly scoped to THIS resolved mission only — never touches the
+    // global rareChance odds any other mission rolls against.
+    const apolloForcesDiscovery = !!(mission.weapon_key && weaponEffectAppliesTo(mission.weapon_key, 'explore') && ANCIENT_WEAPONS[mission.weapon_key].effect === 'guaranteed_rare');
+    if (apolloForcesDiscovery || Math.random() < rareChance) {
       foundCoord = randomExplorationCoord();
       // Figure out whether this coordinate is already somebody else's colony
       // so the exploration log can route the player correctly: colonize it
@@ -7697,10 +8187,15 @@
         // A third possible discovery outcome alongside 'player'/'empty' —
         // an NPC planet, found through this SAME rare-discovery roll, per
         // explicit user request ("透過探索隨機發現"), not a fixed/
-        // pre-visible coordinate.
+        // pre-visible coordinate. 遺跡 (ruins) planets are a distinct
+        // sub-case of 'npc' for known_planets purposes (still becomes
+        // visible/attackable the same way) but NEVER get an
+        // ensureNpcReputation() call — ruins are always hostile/attack-only,
+        // no reputation mechanic at all (see NPC_ARCHETYPES.ruins).
         foundType = occ.is_npc ? 'npc' : 'player';
         foundPlayerName = occ.player_name;
-        if (occ.is_npc) await ensureNpcReputation(occ);
+        isRuinsDiscovery = !!(occ.is_npc && occ.npc_archetype === 'ruins');
+        if (occ.is_npc && !isRuinsDiscovery) await ensureNpcReputation(occ);
         await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
           method: 'POST',
           headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
@@ -7749,9 +8244,16 @@
     // (any of the 3 foundType outcomes) gets its own dedicated flavor pool
     // instead of the generic loot-return one, per explicit user request.
     if (!mission.recalled) {
-      logText = foundType
-        ? EXPLORATION_DISCOVERY_LOG_LINES[foundType][Math.floor(Math.random() * EXPLORATION_DISCOVERY_LOG_LINES[foundType].length)]
-        : EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
+      // 遺跡 gets its own distinct, evocative log line pool instead of the
+      // generic 'npc' one — a sleeping ancient guardian deserves a different
+      // send-off than "we detected an unfamiliar faction."
+      if (isRuinsDiscovery) {
+        logText = EXPLORATION_DISCOVERY_LOG_LINES.ruins[Math.floor(Math.random() * EXPLORATION_DISCOVERY_LOG_LINES.ruins.length)];
+      } else {
+        logText = foundType
+          ? EXPLORATION_DISCOVERY_LOG_LINES[foundType][Math.floor(Math.random() * EXPLORATION_DISCOVERY_LOG_LINES[foundType].length)]
+          : EXPLORATION_LOG_LINES[Math.floor(Math.random() * EXPLORATION_LOG_LINES.length)];
+      }
     }
 
     // Mission attrition (see ATTRITION_TIERS comment above): a chance of
@@ -7761,7 +8263,10 @@
     // folded into this mission's log line for the player to read afterward.
     let scoutLost = 0, fighterLost = 0, transportLost = 0;
     const attritionTier = ATTRITION_TIERS[mission.duration_tier] || ATTRITION_TIERS.short;
-    if (Math.random() < attritionTier.encounterChance * recallFraction) {
+    // Poseidon's no_attrition effect: skip the attrition roll entirely for
+    // this mission — guaranteed zero ship losses en route.
+    const poseidonBlocksAttrition = !!(mission.weapon_key && weaponEffectAppliesTo(mission.weapon_key, 'explore') && ANCIENT_WEAPONS[mission.weapon_key].effect === 'no_attrition');
+    if (!poseidonBlocksAttrition && Math.random() < attritionTier.encounterChance * recallFraction) {
       const defensePower = (mission.fighter_ships_sent || 0) * 1 + (mission.scout_ships_sent || 0) * SCOUT_DEFENSE_POWER;
       const roll = rollAttrition(defensePower, attritionTier.threatMin, attritionTier.threatMax);
       if (roll.survived) {
@@ -7830,12 +8335,31 @@
       const lossNote = lostAny ? '(途中有艦艇折損,詳見下方日誌)' : '';
       if (foundType === 'player') {
         showToast(`探索艦隊返航,發現一顆已被「${foundPlayerName}」佔領的星球(座標 ${foundCoord})！已記錄到已知星球清單。${lossNote}`, lostAny ? 'danger' : 'success', 10000);
+      } else if (isRuinsDiscovery) {
+        showToast(`探索艦隊返航,發現一座沉睡的古代遺跡「${foundPlayerName}」(座標 ${foundCoord})！內部似乎封印著失落的兵器。已記錄到已知星球清單。${lossNote}`, lostAny ? 'danger' : 'success', 10000);
       } else if (foundType === 'npc') {
         showToast(`探索艦隊返航,發現一個 NPC 星球──「${foundPlayerName}」(座標 ${foundCoord})！已記錄到已知星球清單。${lossNote}`, lostAny ? 'danger' : 'success', 10000);
       } else if (foundType === 'empty') {
         showToast(`探索艦隊返航,發現一座無人殖民地(座標 ${foundCoord})！${lossNote}`, lostAny ? 'danger' : 'success', 10000);
       } else {
         showToast(`探索艦隊返航,帶回 ${fmt(metalShare)} 金屬 · ${fmt(crystalShare)} 晶體${lossNote}`, lostAny ? 'danger' : 'success');
+      }
+    }
+    // Weapons are never destroyed and always return home regardless of the
+    // mission's outcome (win/lose/attrition/discovery) — this PATCH is
+    // deliberately unconditional and independent of everything above.
+    if (mission.weapon_key) {
+      try {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(mission.player_name)}&weapon_key=eq.${encodeURIComponent(mission.weapon_key)}&status=eq.on_mission`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === mission.weapon_key);
+        if (w) w.status = 'home';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      } catch (err) {
+        console.error('Return ancient weapon (exploration) error:', err);
       }
     }
     await loadKnownPlanets();
@@ -9252,10 +9776,16 @@
         // known_planets row — always read live rather than cached, since
         // 商貿/attacking changes it in real time without a fresh recon.
         const isPirate = npcPlanet && npcPlanet.npc_archetype === 'pirate';
+        // 遺跡 planets never get a real npc_reputation row (see
+        // ensureNpcReputation()'s own comment) — always-hostile/attack-only,
+        // same "no reputation mechanic at all" treatment as a pirate, just
+        // with its own distinct label.
+        const isRuins = npcPlanet && npcPlanet.npc_archetype === 'ruins';
         const rep = npcPlanet ? npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id)) : null;
         const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
-        const isHostile = isPirate || friendliness <= HOSTILE_FRIENDLINESS_THRESHOLD;
+        const isHostile = isPirate || isRuins || friendliness <= HOSTILE_FRIENDLINESS_THRESHOLD;
         const statusLabel = isPirate ? '海盜·永遠敵對'
+          : isRuins ? '遺跡·封印古代兵器'
           : isHostile ? `敵對(${friendliness})`
           : friendliness >= FRIENDLY_FRIENDLINESS_THRESHOLD ? `友好(${friendliness})`
           : `中立(${friendliness})`;
@@ -9287,7 +9817,7 @@
       // an enemy (attack it first, then it takes real goodwill to recover —
       // except a pirate, which never offers this option at all).
       let tradeBtn = '';
-      if (kp.target_type === 'npc' && npcPlanet && npcPlanet.npc_archetype !== 'pirate') {
+      if (kp.target_type === 'npc' && npcPlanet && npcPlanet.npc_archetype !== 'pirate' && npcPlanet.npc_archetype !== 'ruins') {
         const rep = npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id));
         const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
         if (friendliness > HOSTILE_FRIENDLINESS_THRESHOLD) {
@@ -10102,7 +10632,12 @@
     const metal = Math.max(0, parseFloat(document.getElementById('redeploy-metal').value) || 0);
     const crystal = Math.max(0, parseFloat(document.getElementById('redeploy-crystal').value) || 0);
     const food = Math.max(0, parseFloat(document.getElementById('redeploy-food').value) || 0);
-    const capacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    // Demeter's double_cargo effect doubles the displayed/enforced cap too —
+    // keep this preview honest about what onRedeployLaunchClick() will
+    // actually allow.
+    const weaponKey = document.getElementById('redeploy-weapon-select')?.value || null;
+    const demeterDoublesCargo = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'double_cargo');
+    const capacity = transport * SHIP_TYPES.transport.cargoCapacity * (demeterDoublesCargo ? 2 : 1);
     const loaded = metal + crystal + food;
     note.textContent = `運輸艦可攜帶上限:${fmt(capacity)}(目前攜帶合計 ${fmt(loaded)},金屬+晶體+糧食共用容量)`;
     const over = loaded > capacity;
@@ -10112,9 +10647,11 @@
   ['redeploy-transport', 'redeploy-metal', 'redeploy-crystal', 'redeploy-food'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', updateRedeployCargoEstimate);
   });
+  document.getElementById('redeploy-weapon-select')?.addEventListener('change', updateRedeployCargoEstimate);
   updateRedeployCargoEstimate();
 
   document.getElementById('redeploy-launch-btn').addEventListener('click', onRedeployLaunchClick);
+  document.getElementById('redeploy-weapon-select')?.addEventListener('change', () => updateWeaponPreview('redeploy-weapon-select', 'redeploy-weapon-preview', 'redeploy'));
 
   function onRedeployLaunchClick() {
     const destId = document.getElementById('redeploy-target-planet').value;
@@ -10137,7 +10674,12 @@
     if (scout > (planet.scout_count || 0)) { msg.textContent = `你在家只有 ${planet.scout_count || 0} 艘偵察機`; return; }
     if (fighter > (planet.fighter_count || 0)) { msg.textContent = `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機`; return; }
     if (transport > (planet.transport_count || 0)) { msg.textContent = `你在家只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
-    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    // 帶兵器 — Demeter's double_cargo effect doubles the cargo cap check
+    // right here (the actual cap enforcement lives client-side, in this
+    // validation, not in resolveOneRedeploy()).
+    const weaponKey = document.getElementById('redeploy-weapon-select')?.value || null;
+    const demeterDoublesCargo = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'double_cargo');
+    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity * (demeterDoublesCargo ? 2 : 1);
     const cargoLoaded = metal + crystal + food;
     if (cargoLoaded > cargoCapacity) {
       msg.textContent = `${transport} 艘運輸艦最多能載 ${fmt(cargoCapacity)}(金屬+晶體+糧食合計),目前共 ${fmt(cargoLoaded)},請增加運輸艦或減少攜帶量`;
@@ -10146,7 +10688,13 @@
     if (metal > localMetal) { msg.textContent = `金屬不足,目前只有 ${fmt(localMetal)}`; return; }
     if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
 
-    const travelSec = travelSeconds(planet.coord, destPlanet.coord);
+    // Hermes' fast_travel effect must take effect at LAUNCH time — the
+    // duration is fixed the moment this mission row is created, not at
+    // resolve. Same "must happen at launch" caveat as Artemis' half_duration
+    // for exploration.
+    let travelSec = travelSeconds(planet.coord, destPlanet.coord);
+    const hermesSpeedsTravel = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'fast_travel');
+    if (hermesSpeedsTravel) travelSec = Math.max(30, Math.round(travelSec / 5));
     const shipCounts = { mothership, scout, fighter, transport };
     const travelFoodCost = missionFoodCost(shipCounts, travelSec);
     const totalFoodNeeded = travelFoodCost + food;
@@ -10155,15 +10703,16 @@
       return;
     }
 
+    const weaponNote = weaponKey && ANCIENT_WEAPONS[weaponKey] ? `,攜帶古代兵器「${ANCIENT_WEAPONS[weaponKey].name}」` : '';
     openConfirmModal(
       '確認移防',
-      `派遣艦隊前往座標 ${destPlanet.coord} 駐防,預計航程 ${formatDuration(travelSec)}。出發前會再次確認目的地的艦隊上限是否還有空間。`,
+      `派遣艦隊前往座標 ${destPlanet.coord} 駐防${weaponNote},預計航程 ${formatDuration(travelSec)}。出發前會再次確認目的地的艦隊上限是否還有空間。`,
       '派遣移防',
-      () => launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec })
+      () => launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec, weaponKey })
     );
   }
 
-  async function launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec }) {
+  async function launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec, weaponKey }) {
     const msg = document.getElementById('redeploy-msg');
     msg.className = 'attack-msg';
     const totalToSend = mothership + scout + fighter + transport;
@@ -10229,8 +10778,22 @@
         launched_at: new Date().toISOString(),
         arrival_time: arrivalTime,
         resolved: false,
+        weapon_key: weaponKey || null,
       }),
     });
+    // Book the selected weapon onto this mission — conditional on
+    // status=eq.home to avoid double-booking, same pattern as
+    // launchExploration()/executeAttack().
+    if (weaponKey) {
+      await restRequest(
+        `ancient_weapons?player_name=eq.${encodeURIComponent(planet.player_name)}&weapon_key=eq.${encodeURIComponent(weaponKey)}&status=eq.home`,
+        { method: 'PATCH', body: JSON.stringify({ status: 'on_mission' }) }
+      );
+      const w = ancientWeaponRows.find(r => r.weapon_key === weaponKey);
+      if (w) w.status = 'on_mission';
+      renderAncientWeapons();
+      populateWeaponSelects();
+    }
 
     showToast(`艦隊已出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
     ['redeploy-mothership', 'redeploy-scout', 'redeploy-fighter', 'redeploy-transport', 'redeploy-metal', 'redeploy-crystal', 'redeploy-food'].forEach(id => {
@@ -10267,6 +10830,25 @@
       body: JSON.stringify({ resolved: true }),
     });
     if (!claimed || claimed.length === 0) return;
+
+    // Weapons are never destroyed and always return home regardless of the
+    // mission's outcome — including a recalled 移防 — so this PATCH runs
+    // unconditionally right after the claim succeeds, before branching on
+    // mission.recalled below.
+    if (mission.weapon_key) {
+      try {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(mission.player_name)}&weapon_key=eq.${encodeURIComponent(mission.weapon_key)}&status=eq.on_mission`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === mission.weapon_key);
+        if (w) w.status = 'home';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      } catch (err) {
+        console.error('Return ancient weapon (redeploy) error:', err);
+      }
+    }
 
     if (mission.recalled) {
       await resolveRecalledRedeploy(mission);
