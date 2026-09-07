@@ -903,6 +903,15 @@
   .modal-confirm:hover { opacity: 0.9; }
   #colonize-modal .modal-box { max-width: 400px; }
   #colonize-modal .modal-confirm { background: var(--colonize); border-color: var(--colonize); color: #2a0e1a; }
+  /* 解鎖教學 modal — green/celebratory rather than the shared .modal-confirm's
+     default --warn red, since this is good news ("you just unlocked
+     something"), not a cautionary confirm like 確認攻擊/確認殖民. No cancel
+     button — a single "知道了" is the only way out, by design (blocking
+     modal per the user's own confirmed choice), so it isn't styled as a
+     2-button flex-1 pair the way the other modals' .modal-actions are. */
+  #unlock-tutorial-modal .modal-box { max-width: 380px; }
+  #unlock-tutorial-modal .modal-title { color: var(--ok); }
+  #unlock-tutorial-modal .modal-confirm { background: var(--ok); border-color: var(--ok); color: #06281c; flex: none; margin-left: auto; padding-left: 24px; padding-right: 24px; }
   .colonize-form-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
   .colonize-intro { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px; }
   /* 移防 (redeploy) card layout — per user feedback ("整體空白處好多") that reusing
@@ -1214,6 +1223,23 @@
     <div class="modal-actions">
       <button class="modal-cancel" id="confirm-modal-cancel" type="button">取消</button>
       <button class="modal-confirm" id="confirm-modal-ok" type="button">派出艦隊</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新功能解鎖教學 — per explicit user request ("遊戲上有很多功能解鎖的環節，能不能
+     在每個玩家遇到時可以有很明顯地提示跟教學"), confirmed via AskUserQuestion as a
+     blocking modal (not a toast or a persistent banner) covering both whole-page
+     unlocks (探索、已知星球、攻擊...) and finer in-page unlocks (自動建築升級、殖民
+     母艦...). See UNLOCK_TUTORIALS/checkForNewUnlocks() further down for the full
+     registry and queueing logic — this is just the one shared modal shell every
+     entry reuses, one at a time. -->
+<div class="modal-overlay hidden" id="unlock-tutorial-modal">
+  <div class="modal-box">
+    <div class="modal-title" id="unlock-tutorial-title"></div>
+    <div class="modal-body" id="unlock-tutorial-body"></div>
+    <div class="modal-actions">
+      <button class="modal-confirm" id="unlock-tutorial-ok" type="button">知道了</button>
     </div>
   </div>
 </div>
@@ -4266,7 +4292,130 @@
     // by anything else in this function. No-ops immediately if the section
     // isn't unlocked/visible (see its own declaration comment).
     await loadDashboardOverview();
+    // 解鎖教學 — genuinely last of all: every loader above this line has now
+    // refreshed whatever state a tutorial's own `check()` might read
+    // (ownBuildings, myPlanets, knownPlanetRows, homestead/automation
+    // levels...), so this is the one point in the whole poll cycle where
+    // every gate is guaranteed current. See checkForNewUnlocks()'s own
+    // comment further down for the full registry and queueing behavior.
+    checkForNewUnlocks();
   }
+
+  // ============================================================
+  // 新功能解鎖教學 (unlock tutorials) — per explicit user request: "遊戲上有
+  // 很多功能解鎖的環節，能不能在每個玩家遇到時可以有很明顯地提示跟教學。"
+  // Confirmed via AskUserQuestion: (1) a blocking modal (not a toast or a
+  // persistent banner — see #unlock-tutorial-modal's own HTML comment for
+  // why that rules out reusing the drag-hint-banner pattern here), and (2)
+  // covers BOTH whole-page unlocks (探索、已知星球、攻擊...) and finer
+  // in-page feature unlocks (自動建築升級、殖民母艦...), not just the
+  // section-nav pills.
+  //
+  // Each entry's `check()` calls the EXACT SAME gating function/condition
+  // the corresponding section or feature already uses elsewhere in this
+  // file (fleetTechUnlocked(), hasShipyard(), automationTechUnlocked(),
+  // etc.) — deliberately never a separate re-implementation of the
+  // condition, so a tutorial can never drift out of sync with what
+  // actually unlocked the thing it's teaching.
+  //
+  // Data-driven by design: adding coverage for some future feature is just
+  // one more object in this array, no new plumbing needed.
+  // ============================================================
+  const UNLOCK_TUTORIALS = [
+    { key: 'shipyard-building', title: '🔓 新功能解鎖:造船廠', check: () => fleetTechUnlocked(),
+      body: '拓荒者營地達到 LV2,現在可以在建築格蓋造船廠了!造船廠是生產艦艇、以及解鎖艦隊、生產排程、探索等後續功能的基礎,建議優先蓋一座。' },
+    { key: 'intel-center-building', title: '🔓 新功能解鎖:戰情中心', check: () => fleetTechUnlocked(),
+      body: '拓荒者營地達到 LV2,現在可以蓋戰情中心了!戰情中心是查看已知星球、艦隊動向、戰報,以及總覽功能的必要建築——帳號內任一顆殖民地蓋一座即可全帳號共用。' },
+    { key: 'fleet-section', title: '🔓 新功能解鎖:艦隊', check: () => hasShipyard(),
+      body: '造船廠已經蓋好了!上方新增了「艦隊」分頁,可以查看每種艦艇的在家/出征/探索/建造中數量,以及目前的艦隊總數與上限。' },
+    { key: 'ship-production', title: '🔓 新功能解鎖:生產排程', check: () => hasShipyard(),
+      body: '「生產排程」分頁現在可以用了,能在這裡建造偵察機、戰鬥機、運輸艦,並查看目前的建造佇列進度。' },
+    { key: 'explore-section', title: '🔓 新功能解鎖:探索', check: () => hasShipyard() && hasIntelCenter(),
+      body: '造船廠與戰情中心都已就緒,現在可以派遣艦隊出去探索了!探索有機會帶回資源,也有機會發現其他星球——這是解鎖後續許多功能的關鍵一步。' },
+    { key: 'known-planets', title: '🔓 新功能解鎖:已知星球', check: () => hasIntelCenterAnywhere() && hasAnyKnownPlanet(),
+      body: '你的探索艦隊發現了一顆星球!「已知星球」分頁會列出所有發現過的星球,可以在這裡查看詳情,並視情況偵查、運輸、侵略或殖民。' },
+    { key: 'attack-section', title: '🔓 新功能解鎖:攻擊', check: () => fleetTechUnlocked() && hasAnyKnownPlanet(),
+      body: '現在可以對已發現的星球發動攻擊了。「攻擊」分頁可以選擇目標與派遣的艦隊規模,派出去的艦隊會在抵達後自動判定戰鬥結果。' },
+    { key: 'transport-section', title: '🔓 新功能解鎖:運輸', check: () => fleetTechUnlocked() && hasAnyKnownPlanet(),
+      body: '「運輸」分頁可以向已知的其他玩家星球請求資源(需要對方同意),跟自己殖民地之間互相調度用的「移防」是不同機制,別搞混囉。' },
+    { key: 'redeploy-section', title: '🔓 新功能解鎖:移防', check: () => myPlanets.length > 1,
+      body: '你現在擁有兩顆以上的殖民地了!「移防」分頁可以在自己的殖民地之間調動艦隊與資源,總覽頁面也支援直接拖曳卡片來快速移防。' },
+    { key: 'movement-log', title: '🔓 新功能解鎖:艦隊動向', check: () => (hasIntelCenterAnywhere() && hasAnyKnownPlanet()) || myPlanets.length > 1,
+      body: '「艦隊動向」分頁會統整顯示所有進行中的任務(探索、攻擊、運輸、殖民、移防等),方便你一次掌握艦隊的即時狀態。' },
+    { key: 'battle-log', title: '🔓 新功能解鎖:戰報', check: () => hasIntelCenterAnywhere() && hasAnyKnownPlanet(),
+      body: '「戰報」分頁會記錄每一場戰鬥的詳細結果,包含雙方投入的艦隊與最終戰損。' },
+    { key: 'dashboard-section', title: '🔓 新功能解鎖:總覽', check: () => hasIntelCenterAnywhere(),
+      body: '「總覽」是跨殖民地的總管理畫面,可以一次看到所有星球的資源、艦隊與任務狀態,不用再逐一切換星球查看。' },
+    { key: 'automation-institute-building', title: '🔓 新功能解鎖:自動化研究院', check: () => automationTechUnlocked(),
+      body: '拓荒者營地達到 LV4,現在可以蓋自動化研究院了!升級這座建築可以陸續解鎖自動建築升級、自動探索等自動化功能,幫你省下大量手動操作。' },
+    { key: 'auto-build-upgrade', title: '🔓 新功能解鎖:自動建築升級', check: () => hasAutoBuildUpgrade(),
+      body: '自動化研究院達到 LV2,現在每個建築格都可以開啟「自動升級」,升級完成後會自動排入下一級,不用再手動盯著點。' },
+    { key: 'auto-explore', title: '🔓 新功能解鎖:自動探索', check: () => hasAutoExplore(),
+      body: '自動化研究院達到 LV3,現在可以開啟「自動探索」了!系統會鎖定目前的艦隊編制與航程分級,只要探索名額一空出來就自動派遣,不用再手動一直派。' },
+    { key: 'mothership-ship', title: '🔓 新功能解鎖:殖民母艦', check: () => motherShipTechUnlocked(),
+      body: '拓荒者營地達到 LV4,現在可以建造殖民母艦了!殖民母艦是發動殖民任務的必要艦種,抵達新座標後會化為新殖民地的拓荒者營地。' },
+    { key: 'colonize-ready', title: '🔓 可以殖民新星球了', check: () => knownPlanetRows.some(kp => kp.target_type === 'empty'),
+      body: '你發現了一顆無人星球!到「已知星球」分頁,只要手上有至少 1 艘殖民母艦,就可以對它發動殖民任務,建立你的下一顆殖民地。' },
+  ];
+
+  // Persisted per-browser (same best-effort try/catch pattern as
+  // saveSession()/dismissDragHint()) so a tutorial, once shown, never shows
+  // again — including across logins/reloads, and even if the underlying
+  // feature is somehow later re-locked (e.g. demolishing the shipyard) and
+  // re-unlocked. Stored as a JSON array of keys, not per-key entries, so
+  // this whole feature always costs exactly one localStorage read/write no
+  // matter how many entries UNLOCK_TUTORIALS grows to.
+  const UNLOCK_TUTORIAL_SEEN_KEY = 'space_mining_unlock_tutorials_seen_v1';
+  function loadSeenUnlockTutorials() {
+    try {
+      const raw = localStorage.getItem(UNLOCK_TUTORIAL_SEEN_KEY);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch (err) { return new Set(); }
+  }
+  function saveSeenUnlockTutorials(set) {
+    try { localStorage.setItem(UNLOCK_TUTORIAL_SEEN_KEY, JSON.stringify([...set])); } catch (err) { /* best-effort only */ }
+  }
+  let seenUnlockTutorials = loadSeenUnlockTutorials();
+  let unlockTutorialQueue = [];
+  let unlockTutorialShowing = false;
+
+  // Scans every registry entry once per poll cycle (called from the tail of
+  // pollUpdates(), above) and queues up any whose `check()` has newly
+  // turned true. Marks a tutorial "seen" the MOMENT it's queued — not when
+  // its modal is actually dismissed — so the same scan pass can never
+  // enqueue the same entry twice while an earlier one is still showing: a
+  // player who unlocks several things in the same poll cycle (e.g. reaching
+  // homestead LV2, which unlocks both 造船廠 and 戰情中心 buildability at
+  // once) sees each queued modal in turn, one after another, never a
+  // duplicate and never two stacked on screen at once.
+  function checkForNewUnlocks() {
+    if (!planet) return;
+    UNLOCK_TUTORIALS.forEach(entry => {
+      if (seenUnlockTutorials.has(entry.key)) return;
+      let unlocked = false;
+      try { unlocked = !!entry.check(); } catch (err) { unlocked = false; }
+      if (!unlocked) return;
+      seenUnlockTutorials.add(entry.key);
+      unlockTutorialQueue.push(entry);
+    });
+    saveSeenUnlockTutorials(seenUnlockTutorials);
+    if (!unlockTutorialShowing) showNextUnlockTutorial();
+  }
+
+  function showNextUnlockTutorial() {
+    const entry = unlockTutorialQueue.shift();
+    if (!entry) { unlockTutorialShowing = false; return; }
+    unlockTutorialShowing = true;
+    const titleEl = document.getElementById('unlock-tutorial-title');
+    const bodyEl = document.getElementById('unlock-tutorial-body');
+    if (titleEl) titleEl.textContent = entry.title;
+    if (bodyEl) bodyEl.textContent = entry.body;
+    document.getElementById('unlock-tutorial-modal')?.classList.remove('hidden');
+  }
+  document.getElementById('unlock-tutorial-ok')?.addEventListener('click', () => {
+    document.getElementById('unlock-tutorial-modal')?.classList.add('hidden');
+    showNextUnlockTutorial();
+  });
 
   // Gate offline catch-up per planet id (not a single global flag) so
   // switching to a colony you haven't viewed yet still catches it up once,
