@@ -120,6 +120,17 @@
   .login-msg.error { color: var(--warn); }
 
   header { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .planet-header-thumb {
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+    border-radius: 14px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #1a2440, #0f1626);
+    border: 1px solid var(--line);
+  }
+  .planet-header-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .eyebrow {
     font-family: 'Space Mono', monospace;
     font-size: 12px;
@@ -1228,6 +1239,8 @@
   .movement-entry.transport-in { border-left: 3px solid var(--crystal); background: #221a10; }
 
   @media (max-width: 480px) {
+    .planet-header-thumb { width: 44px; height: 44px; border-radius: 10px; }
+    .header-left { gap: 10px; }
     .resources { grid-template-columns: 1fr; margin: -10px -4px 16px; }
     .resources.has-fleet { grid-template-columns: 1fr 1fr; }
     .attack-card select.target-input { flex-basis: 100%; }
@@ -1414,18 +1427,27 @@
 
 <div class="wrap hidden" id="game-screen">
   <header>
-    <div>
-      <div class="planet-name-row">
-        <div class="eyebrow" id="coord-label">星系座標</div>
-        <button class="planet-rename-btn" id="planet-rename-btn" type="button" aria-label="為這顆星球命名" title="為這顆星球命名"></button>
+    <div class="header-left">
+      <!-- CG 精美圖 — 沿用總覽卡片的星球示意圖池(見 planetArtSrcFor()),讓目前
+           所在的這顆星球在建設/艦隊等每個分頁的頂端也看得到示意圖。找不到對應
+           圖檔時 onerror 只會隱藏這個縮圖容器,不影響標題文字版面。 -->
+      <div class="planet-header-thumb" id="planet-header-thumb">
+        <img id="planet-header-thumb-img" src="" alt=""
+             onerror="document.getElementById('planet-header-thumb').style.display='none';">
       </div>
-      <div class="planet-rename-form hidden" id="planet-rename-form">
-        <input type="text" id="planet-rename-input" maxlength="20" placeholder="為這顆星球取個名字">
-        <button class="planet-rename-save" id="planet-rename-save" type="button">儲存</button>
-        <button class="planet-rename-cancel" id="planet-rename-cancel" type="button">取消</button>
+      <div>
+        <div class="planet-name-row">
+          <div class="eyebrow" id="coord-label">星系座標</div>
+          <button class="planet-rename-btn" id="planet-rename-btn" type="button" aria-label="為這顆星球命名" title="為這顆星球命名"></button>
+        </div>
+        <div class="planet-rename-form hidden" id="planet-rename-form">
+          <input type="text" id="planet-rename-input" maxlength="20" placeholder="為這顆星球取個名字">
+          <button class="planet-rename-save" id="planet-rename-save" type="button">儲存</button>
+          <button class="planet-rename-cancel" id="planet-rename-cancel" type="button">取消</button>
+        </div>
+        <h1 id="planet-title">殖民地</h1>
+        <div class="sub">星塵方舟，從無到有，星海乾坤，任你遨遊。</div>
       </div>
-      <h1 id="planet-title">殖民地</h1>
-      <div class="sub">星塵方舟，從無到有，星海乾坤，任你遨遊。</div>
     </div>
     <button class="signout" id="signout-btn">切換玩家</button>
   </header>
@@ -4093,6 +4115,15 @@
     const label = document.getElementById('coord-label');
     if (!label || !planet) return;
     label.textContent = planet.nickname ? `${planet.nickname} · 座標 ${planet.coord}` : `星系座標 ${planet.coord}`;
+    // 切換星球時把示意圖換成這顆星球對應的圖(見 planetArtSrcFor())。重設
+    // display 是因為上一顆星球若剛好圖檔缺漏,onerror 會把容器藏起來——換了
+    // src 之後要先讓容器恢復可見,新圖能不能載入交給下一輪 onerror 自己判斷。
+    const thumbFrame = document.getElementById('planet-header-thumb');
+    const thumbImg = document.getElementById('planet-header-thumb-img');
+    if (thumbFrame && thumbImg) {
+      thumbFrame.style.display = '';
+      thumbImg.src = planetArtSrcFor(planet.id);
+    }
   }
 
   document.getElementById('planet-rename-btn').innerHTML = PENCIL_ICON;
@@ -10923,173 +10954,4 @@
     try {
       const nowIso = new Date().toISOString();
       const rows = await restRequest(
-        `redeploy_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&arrival_time=lte.${encodeURIComponent(nowIso)}`
-      );
-      if (!rows || rows.length === 0) return;
-      for (const mission of rows) await resolveOneRedeploy(mission);
-    } catch (err) {
-      console.error('Resolve redeploy error:', err);
-    }
-  }
-
-  // Counterpart to resolveOneColonization() — instead of creating a brand
-  // new planet, credits the committed fleet/resources onto the DESTINATION's
-  // EXISTING planets row (which is not necessarily the currently-viewed
-  // planet — this only ever runs while viewing the ORIGIN, since that's what
-  // resolveArrivedRedeployments() is scoped to).
-  async function resolveOneRedeploy(mission) {
-    const claimed = await restRequest(`redeploy_missions?id=eq.${mission.id}&resolved=eq.false`, {
-      method: 'PATCH',
-      body: JSON.stringify({ resolved: true }),
-    });
-    if (!claimed || claimed.length === 0) return;
-
-    // Weapons are never destroyed and always return home regardless of the
-    // mission's outcome — including a recalled 移防 — so this PATCH runs
-    // unconditionally right after the claim succeeds, before branching on
-    // mission.recalled below.
-    if (mission.weapon_key) {
-      try {
-        await restRequest(
-          `ancient_weapons?player_name=eq.${encodeURIComponent(mission.player_name)}&weapon_key=eq.${encodeURIComponent(mission.weapon_key)}&status=eq.on_mission`,
-          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
-        );
-        const w = ancientWeaponRows.find(r => r.weapon_key === mission.weapon_key);
-        if (w) w.status = 'home';
-        renderAncientWeapons();
-        populateWeaponSelects();
-      } catch (err) {
-        console.error('Return ancient weapon (redeploy) error:', err);
-      }
-    }
-
-    if (mission.recalled) {
-      await resolveRecalledRedeploy(mission);
-      return;
-    }
-
-    const rows = await restRequest(`planets?id=eq.${mission.destination_planet_id}&select=*`);
-    const destPlanet = rows && rows[0];
-    if (!destPlanet) return;
-    const res = await currentResourcesOfPlanet(destPlanet);
-    const newMetal = res.metal + (mission.metal_sent || 0);
-    const newCrystal = res.crystal + (mission.crystal_sent || 0);
-    const newFood = res.food + (mission.food_sent || 0);
-    const newMothership = (destPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
-    const newScout = (destPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
-    const newFighter = (destPlanet.fighter_count || 0) + (mission.fighter_ships_sent || 0);
-    const newTransport = (destPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
-    const patchedFields = {
-      metal: newMetal,
-      crystal: newCrystal,
-      food: newFood,
-      mothership_count: newMothership,
-      scout_count: newScout,
-      fighter_count: newFighter,
-      transport_count: newTransport,
-      last_tick: new Date().toISOString(),
-    };
-    await restRequest(`planets?id=eq.${destPlanet.id}`, { method: 'PATCH', body: JSON.stringify(patchedFields) });
-
-    const idx = myPlanets.findIndex(p => String(p.id) === String(destPlanet.id));
-    if (idx >= 0) myPlanets[idx] = { ...destPlanet, ...patchedFields };
-
-    if (planet && String(planet.id) === String(destPlanet.id)) {
-      localMetal = newMetal;
-      localCrystal = newCrystal;
-      localFood = newFood;
-      planet.mothership_count = newMothership;
-      planet.scout_count = newScout;
-      planet.fighter_count = newFighter;
-      planet.transport_count = newTransport;
-      lastTickLocal = Date.now();
-      renderResources();
-    }
-    showToast(`移防艦隊已抵達座標 ${mission.destination_coord},艦隊與物資已進駐該殖民地`, 'success', 8000);
-  }
-
-  // A recalled 移防's counterpart to resolveRecalledColonization() — the
-  // committed fleet/resources return to the ORIGIN planet instead of ever
-  // reaching the destination.
-  async function resolveRecalledRedeploy(mission) {
-    const rows = await restRequest(`planets?id=eq.${mission.origin_planet_id}&select=*`);
-    const originPlanet = rows && rows[0];
-    if (!originPlanet) return;
-    const res = await currentResourcesOfPlanet(originPlanet);
-    const newMetal = res.metal + (mission.metal_sent || 0);
-    const newCrystal = res.crystal + (mission.crystal_sent || 0);
-    const newFood = res.food + (mission.food_sent || 0);
-    const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
-    const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
-    const newFighter = originPlanet.fighter_count + (mission.fighter_ships_sent || 0);
-    const newTransport = (originPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
-    const patchedFields = {
-      metal: newMetal,
-      crystal: newCrystal,
-      food: newFood,
-      mothership_count: newMothership,
-      scout_count: newScout,
-      fighter_count: newFighter,
-      transport_count: newTransport,
-      last_tick: new Date().toISOString(),
-    };
-    await restRequest(`planets?id=eq.${originPlanet.id}`, { method: 'PATCH', body: JSON.stringify(patchedFields) });
-
-    const idx = myPlanets.findIndex(p => String(p.id) === String(originPlanet.id));
-    if (idx >= 0) myPlanets[idx] = { ...originPlanet, ...patchedFields };
-
-    if (planet && String(planet.id) === String(originPlanet.id)) {
-      localMetal = newMetal;
-      localCrystal = newCrystal;
-      localFood = newFood;
-      planet.mothership_count = newMothership;
-      planet.scout_count = newScout;
-      planet.fighter_count = newFighter;
-      planet.transport_count = newTransport;
-      lastTickLocal = Date.now();
-      renderResources();
-      showToast(`移防艦隊已召回返航,艦隊與物資已回到星球(原訂駐防座標 ${mission.destination_coord} 已取消)`, 'success', 8000);
-    }
-  }
-
-  async function recallRedeployMission(mission) {
-    const shipCounts = {
-      mothership: mission.mothership_ships_sent || 0,
-      scout: mission.scout_ships_sent || 0,
-      fighter: mission.fighter_ships_sent || 0,
-      transport: mission.transport_ships_sent || 0,
-    };
-    const result = await applyRecall('redeploy_missions', mission, shipCounts);
-    if (!result) {
-      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
-      return;
-    }
-    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
-    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
-    showToast(`移防艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
-    await loadRedeployMissions();
-  }
-
-  // Try to skip straight past the login screen if this device already has a
-  // remembered, still-valid session.
-  attemptAutoLogin();
-</script>
-<script>
-  // PWA: registers the service worker that lets the game be "installed"
-  // (加入主畫面) and gives it an offline-safe app shell. Deliberately kept in
-  // its own tiny script tag, separate from the main game logic above — this
-  // is purely an install/caching concern, nothing here should ever need to
-  // know about game state. Safe to no-op: browsers that don't support service
-  // workers (or a page opened via plain file://, which isn't a secure
-  // context) just skip this silently and the game itself is completely
-  // unaffected either way.
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(err => {
-        console.error('Service worker registration failed:', err);
-      });
-    });
-  }
-</script>
-</body>
-</html>
+        `redeploy_missions?origin_pl
