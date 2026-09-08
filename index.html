@@ -119,18 +119,30 @@
   .login-msg { font-size: 13px; color: var(--text-dim); margin-top: 12px; min-height: 18px; }
   .login-msg.error { color: var(--warn); }
 
-  header { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-start; }
-  .header-left { display: flex; align-items: center; gap: 16px; }
-  .planet-header-thumb {
-    width: 64px;
-    height: 64px;
-    flex-shrink: 0;
-    border-radius: 14px;
+  /* 星球示意圖標題列 — 原本是標題旁邊一個 64x64 小方塊,使用者回饋「這樣一小塊
+     CG 效果不好」,改成整個標題列的背景圖(見 renderPlanetNameLabel())。
+     `header` 本身變成一張有邊角、有底色的「橫幅卡片」,圖片與深色漸層蓋在最
+     底層(z-index 0/1),實際文字內容在最上層(.header-content, z-index 2)
+     維持完全可讀。沒有圖檔或圖檔載入失敗時,`#header-bg-img`/`#header-bg-
+     overlay` 的 onerror 只會把這兩層藏起來,退回純底色卡片,不影響任何文字
+     版面或功能。 */
+  header {
+    position: relative;
+    margin-bottom: 28px;
+    padding: 20px 22px;
+    border-radius: 16px;
     overflow: hidden;
-    background: linear-gradient(135deg, #1a2440, #0f1626);
+    background: linear-gradient(135deg, #171d33, #0d1220);
     border: 1px solid var(--line);
   }
-  .planet-header-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .header-bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+  .header-bg-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: linear-gradient(115deg, rgba(8,11,20,0.92) 0%, rgba(8,11,20,0.74) 45%, rgba(8,11,20,0.4) 100%);
+  }
+  .header-content { position: relative; z-index: 2; display: flex; justify-content: space-between; align-items: flex-start; }
   .eyebrow {
     font-family: 'Space Mono', monospace;
     font-size: 12px;
@@ -1239,8 +1251,7 @@
   .movement-entry.transport-in { border-left: 3px solid var(--crystal); background: #221a10; }
 
   @media (max-width: 480px) {
-    .planet-header-thumb { width: 44px; height: 44px; border-radius: 10px; }
-    .header-left { gap: 10px; }
+    header { padding: 14px 16px; }
     .resources { grid-template-columns: 1fr; margin: -10px -4px 16px; }
     .resources.has-fleet { grid-template-columns: 1fr 1fr; }
     .attack-card select.target-input { flex-basis: 100%; }
@@ -1427,14 +1438,15 @@
 
 <div class="wrap hidden" id="game-screen">
   <header>
-    <div class="header-left">
-      <!-- CG 精美圖 — 沿用總覽卡片的星球示意圖池(見 planetArtSrcFor()),讓目前
-           所在的這顆星球在建設/艦隊等每個分頁的頂端也看得到示意圖。找不到對應
-           圖檔時 onerror 只會隱藏這個縮圖容器,不影響標題文字版面。 -->
-      <div class="planet-header-thumb" id="planet-header-thumb">
-        <img id="planet-header-thumb-img" src="" alt=""
-             onerror="document.getElementById('planet-header-thumb').style.display='none';">
-      </div>
+    <!-- CG 精美圖 — 沿用總覽卡片的星球示意圖池(見 planetArtSrcFor()),當成
+         整個標題列的背景圖,而不是旁邊一個小方塊(使用者原本的回饋)。深色漸層
+         (.header-bg-overlay)蓋在圖片上方,確保下面的文字在任何圖片上都維持
+         可讀。找不到對應圖檔時,onerror 只會把這兩層藏起來,退回純底色的標題
+         列,不影響文字版面或任何功能。 -->
+    <img class="header-bg-img" id="header-bg-img" src="" alt=""
+         onerror="this.style.display='none'; document.getElementById('header-bg-overlay').style.display='none';">
+    <div class="header-bg-overlay" id="header-bg-overlay"></div>
+    <div class="header-content">
       <div>
         <div class="planet-name-row">
           <div class="eyebrow" id="coord-label">星系座標</div>
@@ -1448,8 +1460,8 @@
         <h1 id="planet-title">殖民地</h1>
         <div class="sub">星塵方舟，從無到有，星海乾坤，任你遨遊。</div>
       </div>
+      <button class="signout" id="signout-btn">切換玩家</button>
     </div>
-    <button class="signout" id="signout-btn">切換玩家</button>
   </header>
 
   <!-- 快速跳轉列 — each pill starts hidden; updateSectionNavVisibility() (called
@@ -4115,14 +4127,16 @@
     const label = document.getElementById('coord-label');
     if (!label || !planet) return;
     label.textContent = planet.nickname ? `${planet.nickname} · 座標 ${planet.coord}` : `星系座標 ${planet.coord}`;
-    // 切換星球時把示意圖換成這顆星球對應的圖(見 planetArtSrcFor())。重設
-    // display 是因為上一顆星球若剛好圖檔缺漏,onerror 會把容器藏起來——換了
-    // src 之後要先讓容器恢復可見,新圖能不能載入交給下一輪 onerror 自己判斷。
-    const thumbFrame = document.getElementById('planet-header-thumb');
-    const thumbImg = document.getElementById('planet-header-thumb-img');
-    if (thumbFrame && thumbImg) {
-      thumbFrame.style.display = '';
-      thumbImg.src = planetArtSrcFor(planet.id);
+    // 切換星球時把標題列背景圖換成這顆星球對應的圖(見 planetArtSrcFor())。
+    // 重設 display 是因為上一顆星球若剛好圖檔缺漏,onerror 會把背景圖跟深色
+    // 漸層都藏起來——換了 src 之後要先讓兩層恢復可見,新圖能不能載入交給下
+    // 一輪 onerror 自己判斷。
+    const bgImg = document.getElementById('header-bg-img');
+    const bgOverlay = document.getElementById('header-bg-overlay');
+    if (bgImg && bgOverlay) {
+      bgImg.style.display = '';
+      bgOverlay.style.display = '';
+      bgImg.src = planetArtSrcFor(planet.id);
     }
   }
 
