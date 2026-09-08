@@ -28,7 +28,7 @@
 // shortcut launches via the manifest's start_url, not a plain page load).
 // Fixed by caching './' instead — the directory root, i.e. whatever file
 // is actually serving as the site's index, regardless of its real name.
-const CACHE_NAME = 'stardust-ark-shell-v2';
+const CACHE_NAME = 'stardust-ark-shell-v3';
 
 const SHELL_FILES = [
   './',
