@@ -75,6 +75,20 @@
     position: relative;
     z-index: 1;
   }
+  /* CG 精美圖 — 開場畫面主視覺。這裡不放固定尺寸的 <img>,而是用一個保留
+     16:10 版面空間的容器,實際圖檔路徑見 login-hero-art 的 src — 找不到檔案
+     時 onerror 會直接把整個容器藏起來,登入畫面會自動退回成純文字版(現在的
+     樣子),不會出現破圖或版面跳動。要換圖只需要把同名檔案放在遊戲檔案旁邊
+     的 art/ 資料夾即可,不用改任何程式碼。 */
+  .login-hero-frame {
+    aspect-ratio: 16 / 10;
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 20px;
+    border: 1px solid var(--line);
+    background: linear-gradient(160deg, #182544 0%, #0e1526 100%);
+  }
+  .login-hero-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .login-screen h1 { font-family: 'Space Mono', monospace; font-size: 22px; margin-bottom: 6px; }
   .login-screen .sub { color: var(--text-dim); font-size: 14px; margin-bottom: 24px; }
   .login-screen input {
@@ -1180,6 +1194,10 @@
   .explore-log-entry .log-loot { font-family: 'Space Mono', monospace; font-size: 12.5px; }
   .explore-log-entry .log-loot.colonize-locked { color: var(--text-dim); font-style: italic; }
   .explore-log-entry.rare { border-left: 3px solid var(--crystal); background: #221a10; }
+  /* CG 精美圖 — 探索發現事件插圖。同樣用 onerror 整塊隱藏做優雅退場,圖檔
+     路徑見 DISCOVERY_ART(遊戲邏輯區塊),放在 art/ 資料夾即可生效。 */
+  .discovery-art { border-radius: 8px; overflow: hidden; margin-bottom: 8px; aspect-ratio: 16 / 9; }
+  .discovery-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   button.colonize-btn {
     margin-top: 8px;
     font-family: 'Inter', sans-serif;
@@ -1373,6 +1391,12 @@
 </svg>
 
 <div class="login-screen" id="login-screen">
+  <!-- CG 精美圖 — 開場主視覺。找不到 art/login-hero.jpg 時 onerror 會隱藏
+       整個容器,登入畫面自動退回純文字版,不影響任何功能。 -->
+  <div class="login-hero-frame" id="login-hero-frame">
+    <img id="login-hero-art" src="art/login-hero.jpg" alt=""
+         onerror="document.getElementById('login-hero-frame').style.display='none';">
+  </div>
   <div class="eyebrow">星塵方舟：起源</div>
   <h1>登入你的星球</h1>
   <div class="sub">輸入玩家代號與密碼。第一次使用某個代號登入時,你輸入的密碼會成為這個代號往後的登入密碼。</div>
@@ -3017,6 +3041,30 @@
     ],
   };
 
+  // CG 精美圖 — 探索發現事件插圖,四個分類對應 EXPLORATION_DISCOVERY_LOG_LINES
+  // 同一組 key(empty/player/npc/ruins),同一套「發現了什麼」判斷,不會跟文字
+  // 描述的分類漂移。實際圖檔放在遊戲檔案旁邊的 art/discovery/ 資料夾,檔名
+  // 必須完全對應下面這 4 個路徑;哪個檔案還沒準備好,對應的插圖就自動不顯示
+  // (見 renderExplorationLog() 裡 <img onerror>),不影響其他已經有圖的分類,
+  // 也完全不影響原本純文字的顯示與功能。
+  const DISCOVERY_ART = {
+    empty: 'art/discovery/empty.jpg',
+    player: 'art/discovery/player.jpg',
+    npc: 'art/discovery/npc.jpg',
+    ruins: 'art/discovery/ruins.jpg',
+  };
+  // 遺跡是 found_type==='npc' 底下的一個特例(跟 log 文案判斷邏輯完全一致,
+  // 見 resolveOneExploration() 的 isRuinsDiscovery),資料庫裡不會另外存一個
+  // 'ruins' 的 found_type,所以要另外比對這筆發現的座標是不是遺跡星球。
+  function explorationDiscoveryArtKey(m) {
+    if (!m || !m.found_type) return null;
+    if (m.found_type === 'npc') {
+      const occ = npcPlanetRows.find(p => String(p.coord) === String(m.found_coord));
+      return (occ && occ.npc_archetype === 'ruins') ? 'ruins' : 'npc';
+    }
+    return DISCOVERY_ART[m.found_type] ? m.found_type : null;
+  }
+
   // Demolishing refunds nothing but is cheaper/faster than the build it undoes —
   // enough friction that respec-ing a plot is a real decision, not a free reset.
   const DEMOLISH_COST_FRACTION = 0.4;
@@ -4523,8 +4571,19 @@
     await loadFleetMovements();
     await loadBattleLog();
     await resolveArrivedExplorations();
-    await loadExplorationData();
+    // loadNpcData() (npcPlanetRows) must run BEFORE loadExplorationData() —
+    // renderExplorationLog()'s CG-art lookup (explorationDiscoveryArtKey())
+    // cross-references a discovery's found_coord against npcPlanetRows to
+    // tell a 遺跡 apart from an ordinary NPC. With the old order, the very
+    // first poll after login/switch rendered the log against whatever
+    // npcPlanetRows was left over from before (empty, on a fresh login) and
+    // showed every NPC discovery — ruins included — with the generic 'npc'
+    // art until some LATER poll cycle happened to re-render the log for an
+    // unrelated reason. Same "stale array on the first poll" race class as
+    // several other bugs already documented in this file; fixed the same
+    // way, by reordering rather than adding a workaround.
     await loadNpcData();
+    await loadExplorationData();
     await loadKnownPlanets();
     await resolveArrivedColonizations();
     await loadColonizationMissions();
@@ -8655,7 +8714,15 @@
           extra = `<button class="colonize-btn" data-colonize="${m.id}" data-coord="${m.found_coord}" type="button">殖民這顆星球(座標 ${m.found_coord})</button>`;
         }
       }
+      // CG 精美圖 — 只有真的觸發發現(isRare)才附插圖,平常「這趟沒有帶回任何
+      // 戰利品」的普通探索紀錄維持純文字。找不到對應圖檔時 onerror 會把整個
+      // .discovery-art 容器藏起來,退回原本純文字的樣子。
+      const artKey = isRare ? explorationDiscoveryArtKey(m) : null;
+      const artHtml = artKey
+        ? `<div class="discovery-art"><img src="${DISCOVERY_ART[artKey]}" alt="" onerror="this.closest('.discovery-art').style.display='none';"></div>`
+        : '';
       return `<div class="explore-log-entry${isRare ? ' rare' : ''}">
+        ${artHtml}
         <div class="log-text">${m.log_text || ''}</div>
         <div class="log-loot">${lootLine}</div>
         ${extra}
