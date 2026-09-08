@@ -1600,8 +1600,10 @@
       </div>
       <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Only weapons at status='home'
            are listed; the preview line reflects whether this weapon's own
-           specialty (探索) actually matches this form. -->
-      <div class="ship-input-group">
+           specialty (探索) actually matches this form. Hidden entirely until
+           the player has crafted their first weapon — see
+           populateWeaponSelects()'s visibility toggle. -->
+      <div class="ship-input-group hidden" id="explore-weapon-group">
         <label class="ship-input-label" for="explore-weapon-select">帶兵器</label>
         <select class="target-input" id="explore-weapon-select">
           <option value="">不攜帶</option>
@@ -1644,8 +1646,10 @@
       <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Lives here (not inside
            #confirm-modal — its body is set via .textContent, so a live
            control can't sit inside it) and is read in onAttackClick() before
-           the confirm modal opens, then threaded through to executeAttack(). -->
-      <div class="ship-input-group">
+           the confirm modal opens, then threaded through to executeAttack().
+           Hidden entirely until the player has crafted their first weapon —
+           see populateWeaponSelects()'s visibility toggle. -->
+      <div class="ship-input-group hidden" id="attack-weapon-group">
         <label class="ship-input-label" for="attack-weapon-select">帶兵器</label>
         <select class="target-input" id="attack-weapon-select">
           <option value="">不攜帶</option>
@@ -1734,8 +1738,10 @@
       <div class="colonize-cargo-note" id="redeploy-cargo-note"></div>
       <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Only weapons at status='home'
            are listed (see renderWeaponSelect()); the preview line updates
-           live as the selection changes (see updateRedeployWeaponPreview()). -->
-      <div class="ship-input-group">
+           live as the selection changes (see updateRedeployWeaponPreview()).
+           Hidden entirely until the player has crafted their first weapon —
+           see populateWeaponSelects()'s visibility toggle. -->
+      <div class="ship-input-group hidden" id="redeploy-weapon-group">
         <label class="ship-input-label" for="redeploy-weapon-select">帶兵器</label>
         <select class="target-input" id="redeploy-weapon-select">
           <option value="">不攜帶</option>
@@ -2694,11 +2700,20 @@
   // every other player_name-scoped loader in this file.
   function populateWeaponSelects() {
     const homeWeapons = homeAncientWeapons();
+    // The whole "帶兵器" control is hidden until the player has ever crafted
+    // at least one weapon (ancientWeaponRows.length > 0 — true the moment
+    // crafting starts, not just once it's home), not merely tied to whether
+    // one happens to be home right now. That keeps the field from
+    // disappearing again just because their only weapon is temporarily away
+    // on a mission, while also not showing an empty, option-less dropdown to
+    // a player who has never unlocked the feature at all.
+    const hasAnyWeaponEver = ancientWeaponRows.length > 0;
     [
-      { selectId: 'explore-weapon-select', previewId: 'explore-weapon-preview', missionType: 'explore' },
-      { selectId: 'attack-weapon-select', previewId: 'attack-weapon-preview', missionType: 'attack' },
-      { selectId: 'redeploy-weapon-select', previewId: 'redeploy-weapon-preview', missionType: 'redeploy' },
-    ].forEach(({ selectId, previewId, missionType }) => {
+      { selectId: 'explore-weapon-select', previewId: 'explore-weapon-preview', missionType: 'explore', groupId: 'explore-weapon-group' },
+      { selectId: 'attack-weapon-select', previewId: 'attack-weapon-preview', missionType: 'attack', groupId: 'attack-weapon-group' },
+      { selectId: 'redeploy-weapon-select', previewId: 'redeploy-weapon-preview', missionType: 'redeploy', groupId: 'redeploy-weapon-group' },
+    ].forEach(({ selectId, previewId, missionType, groupId }) => {
+      document.getElementById(groupId)?.classList.toggle('hidden', !hasAnyWeaponEver);
       const select = document.getElementById(selectId);
       if (!select) return;
       const current = select.value;
@@ -4640,6 +4655,8 @@
       body: '拓荒者營地達到 LV4,現在可以建造殖民母艦了!殖民母艦是發動殖民任務的必要艦種,抵達新座標後會化為新殖民地的拓荒者營地。' },
     { key: 'colonize-ready', title: '🔓 可以殖民新星球了', check: () => knownPlanetRows.some(kp => kp.target_type === 'empty'),
       body: '你發現了一顆無人星球!到「已知星球」分頁,只要手上有至少 1 艘殖民母艦,就可以對它發動殖民任務,建立你的下一顆殖民地。' },
+    { key: 'ancient-weapon-ready', title: '🔓 新功能解鎖:古代兵器出征', check: () => ancientWeaponRows.length > 0,
+      body: '你打造出第一件古代兵器了!現在探索、攻擊、移防的派遣畫面上都會出現「帶兵器」欄位,可以選擇帶著它出征——記得每件兵器都有自己專精的任務類型,選對任務才能發揮真正的效果,而且不管任務結果如何,兵器本身永遠不會損毀,一定會平安歸隊。' },
   ];
 
   // Persisted per-browser (same best-effort try/catch pattern as
