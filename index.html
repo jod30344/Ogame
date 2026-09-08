@@ -469,6 +469,12 @@
   /* align-items changed from center to flex-start (was fine for one button,
      now two stack in .dash-card-actions and would otherwise vertically
      center against just the single-line planet name). */
+  /* CG 精美圖 — 每個星球的示意圖(總覽卡片頂端一條窄banner)。同一個掛點/
+     onerror優雅隱藏設計,見 planetmultiplayer.html 其他 .discovery-art /
+     .login-hero-frame 的說明。圖檔哪個座標配到哪張圖,見 PLANET_ART_COUNT /
+     planetArtSrcFor()。 */
+  .dash-planet-thumb { aspect-ratio: 3 / 1; border-radius: 8px; overflow: hidden; }
+  .dash-planet-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .dash-planet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .dash-planet-name { font-weight: 600; }
   .dash-card-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
@@ -3063,6 +3069,28 @@
       return (occ && occ.npc_archetype === 'ruins') ? 'ruins' : 'npc';
     }
     return DISCOVERY_ART[m.found_type] ? m.found_type : null;
+  }
+
+  // CG 精美圖 — 總覽頁每張星球卡片頂端的示意圖banner。星球數量沒有上限(玩家
+  // 殖民越多顆越多張卡片),不可能每顆都配一張獨一無二的圖,所以做法是準備一小
+  // 批「星球風貌」圖(沙漠/海洋/冰原/森林/火山...等),依每顆星球自己的 id
+  // 算出一個固定的索引去選圖 —— 同一顆星球每次重新整理都會拿到同一張圖(視覺
+  // 上有身分感),不同星球則會分散拿到不同張。目前預留 6 張的池子,檔名
+  // art/planets/1.jpg ~ 6.jpg;之後想擴充只需要把 PLANET_ART_COUNT 改大、
+  // 補上對應檔名即可,不用改這裡的邏輯。跟其他 CG 插畫掛點一樣,單張圖檔案
+  // 不存在時只會讓「那一顆星球」的示意圖 banner 隱藏,不影響其他星球或任何
+  // 功能。
+  const PLANET_ART_COUNT = 6;
+  function planetArtIndexFor(planetId) {
+    const str = String(planetId || '');
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return hash % PLANET_ART_COUNT;
+  }
+  function planetArtSrcFor(planetId) {
+    return `art/planets/${planetArtIndexFor(planetId) + 1}.jpg`;
   }
 
   // Demolishing refunds nothing but is cheaper/faster than the build it undoes —
@@ -9015,6 +9043,7 @@
       const fleetBreakdownHtml = fleetBreakdownParts.join(' · ');
 
       return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}" data-planet-id="${p.id}">
+        <div class="dash-planet-thumb"><img src="${planetArtSrcFor(p.id)}" alt="" onerror="this.parentElement.style.display='none';"></div>
         <div class="dash-planet-head">
           <span class="dash-planet-name">${homeMark}${name}</span>
           <div class="dash-card-actions">
