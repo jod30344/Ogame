@@ -375,9 +375,24 @@
     flex-direction: column;
     gap: 8px;
     position: relative;
+    overflow: hidden;
   }
   .plot-card.empty { border-style: dashed; }
   .plot-card.dragging { z-index: 50; box-shadow: 0 10px 28px rgba(0,0,0,0.4); cursor: grabbing; }
+  /* CG 精美圖 — 建築格卡片(拓荒者營地/金屬礦場/晶體精煉廠/農場/造船廠/戰情中心/
+     防空炮塔/自動化研究院/神殿),使用者原話:「效果很好,接下來建築格也麻煩了,
+     一併優化」,沿用資源欄卡片(.res-card-bg)同一套疊層寫法。這 9 種建築類型是
+     固定分類(不像星球示意圖那樣按星球數量做雜湊池),每種建築對應一張固定圖
+     `art/buildings/<building_type>.jpg`——同一張圖在「建造中/排隊中/已完工/已達
+     上限」等每一種卡片狀態下都共用同一個建築類型的圖。刻意不套用在「空地」卡片
+     (格子還沒選建築類型,沒有單一對應的圖)、也不套用在古代兵器打造格(不同功能,
+     維持原樣)。疊層順序:`.plot-card-bg`(圖片,z-index 0)→
+     `.plot-card-bg-overlay`(深色蓋層,z-index 1)→ `.plot-card-content`(原本
+     的文字/按鈕/拖曳把手,z-index 2)。找不到圖檔時,`.plot-card-bg` 的 onerror
+     會把自己跟緊接著的 overlay 一起藏起來,退回原本純底色卡片,不影響任何功能。 */
+  .plot-card-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+  .plot-card-bg-overlay { position: absolute; inset: 0; z-index: 1; background: rgba(9,12,20,0.74); }
+  .plot-card-content { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 8px; }
   .plot-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .plot-drag-handle {
     width: 22px;
@@ -5719,14 +5734,19 @@
       const progress = Math.min(1, elapsedSec / totalSec);
       const remaining = Math.max(0, totalSec - elapsedSec);
       return `<div class="plot-card homestead-card">
-        <div class="plot-label">格 1 · 拓荒者營地 · 升級中</div>
-        <div class="plot-head">
-          <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
-          <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
+        <img class="plot-card-bg" src="art/buildings/homestead.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="plot-card-bg-overlay"></div>
+        <div class="plot-card-content">
+          <div class="plot-label">格 1 · 拓荒者營地 · 升級中</div>
+          <div class="plot-head">
+            <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
+            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
+          <div class="plot-detail">${formatDuration(remaining)} 後升級完成</div>
+          ${renderCancelConstructionButton(construction)}
         </div>
-        <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
-        <div class="plot-detail">${formatDuration(remaining)} 後升級完成</div>
-        ${renderCancelConstructionButton(construction)}
       </div>`;
     }
     if (construction && construction.status === 'queued') {
@@ -5735,13 +5755,18 @@
       // so this is a real ETA, not just "waiting for a poll to promote it."
       const waitRemainingSec = Math.max(0, (new Date(construction.started_at).getTime() - Date.now()) / 1000);
       return `<div class="plot-card homestead-card">
-        <div class="plot-label">格 1 · 拓荒者營地 · 排隊中(第 ${position} 順位)</div>
-        <div class="plot-head">
-          <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
-          <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
+        <img class="plot-card-bg" src="art/buildings/homestead.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="plot-card-bg-overlay"></div>
+        <div class="plot-card-content">
+          <div class="plot-label">格 1 · 拓荒者營地 · 排隊中(第 ${position} 順位)</div>
+          <div class="plot-head">
+            <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
+            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">→ LV ${construction.target_level}</span></div>
+          </div>
+          <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始施工</div>
+          ${renderCancelConstructionButton(construction)}
         </div>
-        <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始施工</div>
-        ${renderCancelConstructionButton(construction)}
       </div>`;
     }
 
@@ -5771,14 +5796,19 @@
     // once it has new content ready to gate behind it.
     if (level >= MAX_HOMESTEAD_LEVEL) {
       return `<div class="plot-card homestead-card">
-        <div class="plot-label">格 1 · 拓荒者營地</div>
-        <div class="plot-head">
-          <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
-          <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${level}</span></div>
+        <img class="plot-card-bg" src="art/buildings/homestead.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="plot-card-bg-overlay"></div>
+        <div class="plot-card-content">
+          <div class="plot-label">格 1 · 拓荒者營地</div>
+          <div class="plot-head">
+            <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
+            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${level}</span></div>
+          </div>
+          <div class="plot-detail">目前產量 +${metalRate.toFixed(1)} 金屬 / 秒 · +${crystalRate.toFixed(1)} 晶體 / 秒</div>
+          <div class="plot-detail">${homesteadUnlockLine}</div>
+          <div class="plot-detail">已達目前版本上限</div>
         </div>
-        <div class="plot-detail">目前產量 +${metalRate.toFixed(1)} 金屬 / 秒 · +${crystalRate.toFixed(1)} 晶體 / 秒</div>
-        <div class="plot-detail">${homesteadUnlockLine}</div>
-        <div class="plot-detail">已達目前版本上限</div>
       </div>`;
     }
 
@@ -5833,16 +5863,21 @@
     const affordable = affordableByResource && requirementMet;
 
     return `<div class="plot-card homestead-card">
-      <div class="plot-label">格 1 · 拓荒者營地</div>
-      <div class="plot-head">
-        <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
-        <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${level}</span></div>
+      <img class="plot-card-bg" src="art/buildings/homestead.jpg" alt=""
+           onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+      <div class="plot-card-bg-overlay"></div>
+      <div class="plot-card-content">
+        <div class="plot-label">格 1 · 拓荒者營地</div>
+        <div class="plot-head">
+          <div class="plot-icon homestead">${BUILDING_ICONS.homestead || ''}</div>
+          <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${level}</span></div>
+        </div>
+        <div class="plot-detail">目前產量 +${metalRate.toFixed(1)} 金屬 / 秒 · +${crystalRate.toFixed(1)} 晶體 / 秒</div>
+        <div class="plot-detail">${homesteadUnlockLine}</div>
+        ${reqLine}
+        <div class="plot-detail">升級費用:${fmt(cost.metal)} 金屬 · ${fmt(cost.crystal)} 晶體 · ${formatDuration(seconds)}</div>
+        <button class="upgrade" data-plot="0" data-type="homestead" data-level="${targetLevel}" ${affordable ? '' : 'disabled'}>升級到 LV ${targetLevel}</button>
       </div>
-      <div class="plot-detail">目前產量 +${metalRate.toFixed(1)} 金屬 / 秒 · +${crystalRate.toFixed(1)} 晶體 / 秒</div>
-      <div class="plot-detail">${homesteadUnlockLine}</div>
-      ${reqLine}
-      <div class="plot-detail">升級費用:${fmt(cost.metal)} 金屬 · ${fmt(cost.crystal)} 晶體 · ${formatDuration(seconds)}</div>
-      <button class="upgrade" data-plot="0" data-type="homestead" data-level="${targetLevel}" ${affordable ? '' : 'disabled'}>升級到 LV ${targetLevel}</button>
     </div>`;
   }
 
@@ -5894,17 +5929,22 @@
         const def = BUILDING_TYPES[construction.building_type];
         const isDemolish = construction.target_level === 0;
         html += `<div class="plot-card${isDemolish ? ' demolishing' : ''}" data-drag-plot="${plotIndex}">
-          <div class="plot-label-row">
-            <div class="plot-label">格 ${plotIndex + 1} · ${isDemolish ? '拆除中' : '建造中'}</div>
-            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          <img class="plot-card-bg" src="art/buildings/${construction.building_type}.jpg" alt=""
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+          <div class="plot-card-bg-overlay"></div>
+          <div class="plot-card-content">
+            <div class="plot-label-row">
+              <div class="plot-label">格 ${plotIndex + 1} · ${isDemolish ? '拆除中' : '建造中'}</div>
+              <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+            </div>
+            <div class="plot-head">
+              <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
+              <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
+            </div>
+            <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
+            <div class="plot-detail">${formatDuration(remaining)} 後${isDemolish ? '拆除完成' : '完工'}</div>
+            ${renderCancelConstructionButton(construction)}
           </div>
-          <div class="plot-head">
-            <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
-            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
-          </div>
-          <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progress * 100)}%;"></div></div>
-          <div class="plot-detail">${formatDuration(remaining)} 後${isDemolish ? '拆除完成' : '完工'}</div>
-          ${renderCancelConstructionButton(construction)}
         </div>`;
       } else if (construction && construction.status === 'queued') {
         const position = queuedList.findIndex(r => r.id === construction.id) + 1;
@@ -5914,16 +5954,21 @@
         // so this is a real ETA, not just "waiting for a poll to promote it."
         const waitRemainingSec = Math.max(0, (new Date(construction.started_at).getTime() - Date.now()) / 1000);
         html += `<div class="plot-card" data-drag-plot="${plotIndex}">
-          <div class="plot-label-row">
-            <div class="plot-label">格 ${plotIndex + 1} · 排隊中(第 ${position} 順位)</div>
-            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          <img class="plot-card-bg" src="art/buildings/${construction.building_type}.jpg" alt=""
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+          <div class="plot-card-bg-overlay"></div>
+          <div class="plot-card-content">
+            <div class="plot-label-row">
+              <div class="plot-label">格 ${plotIndex + 1} · 排隊中(第 ${position} 順位)</div>
+              <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+            </div>
+            <div class="plot-head">
+              <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
+              <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
+            </div>
+            <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始${isDemolish ? '拆除' : '施工'}</div>
+            ${renderCancelConstructionButton(construction)}
           </div>
-          <div class="plot-head">
-            <div class="plot-icon ${construction.building_type}">${BUILDING_ICONS[construction.building_type] || ''}</div>
-            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">${isDemolish ? '拆除' : `→ LV ${construction.target_level}`}</span></div>
-          </div>
-          <div class="plot-detail">預計 ${formatDuration(waitRemainingSec)} 後開始${isDemolish ? '拆除' : '施工'}</div>
-          ${renderCancelConstructionButton(construction)}
         </div>`;
       } else if (building) {
         const def = BUILDING_TYPES[building.building_type];
@@ -5998,17 +6043,22 @@
                ${autoUpgradeBtnHtml}
              </div>`;
         html += `<div class="plot-card" data-drag-plot="${plotIndex}">
-          <div class="plot-label-row">
-            <div class="plot-label">格 ${plotIndex + 1}</div>
-            <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+          <img class="plot-card-bg" src="art/buildings/${building.building_type}.jpg" alt=""
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+          <div class="plot-card-bg-overlay"></div>
+          <div class="plot-card-content">
+            <div class="plot-label-row">
+              <div class="plot-label">格 ${plotIndex + 1}</div>
+              <button class="plot-drag-handle" type="button" aria-label="拖曳調整顯示順序" title="拖曳調整顯示順序">${DRAG_HANDLE_ICON}</button>
+            </div>
+            <div class="plot-head">
+              <div class="plot-icon ${building.building_type}">${BUILDING_ICONS[building.building_type] || ''}</div>
+              <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${displayLevel}</span></div>
+            </div>
+            <div class="plot-detail">${effectLine}</div>
+            ${upgradeBlock}
+            <button class="demolish-btn" data-demolish-plot="${plotIndex}" data-demolish-type="${building.building_type}" data-demolish-level="${displayLevel}" ${demoAffordable ? '' : 'disabled'}>拆除(${fmt(demoCost.metal)}金屬·${fmt(demoCost.crystal)}晶體·${formatDuration(demoSeconds)})</button>
           </div>
-          <div class="plot-head">
-            <div class="plot-icon ${building.building_type}">${BUILDING_ICONS[building.building_type] || ''}</div>
-            <div class="plot-name-row"><span class="plot-name">${def.name}</span><span class="plot-level">LV ${displayLevel}</span></div>
-          </div>
-          <div class="plot-detail">${effectLine}</div>
-          ${upgradeBlock}
-          <button class="demolish-btn" data-demolish-plot="${plotIndex}" data-demolish-type="${building.building_type}" data-demolish-level="${displayLevel}" ${demoAffordable ? '' : 'disabled'}>拆除(${fmt(demoCost.metal)}金屬·${fmt(demoCost.crystal)}晶體·${formatDuration(demoSeconds)})</button>
         </div>`;
       } else {
         // empty plot
