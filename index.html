@@ -125,12 +125,18 @@
      底層(z-index 0/1),實際文字內容在最上層(.header-content, z-index 2)
      維持完全可讀。沒有圖檔或圖檔載入失敗時,`#header-bg-img`/`#header-bg-
      overlay` 的 onerror 只會把這兩層藏起來,退回純底色卡片,不影響任何文字
-     版面或功能。 */
+     版面或功能。
+     REVISION(緊接著的下一輪): 使用者回饋「上面固定畫面...佔據了整個遊戲畫面
+     的一半」——指的是這個橫幅卡片,加上底下 .section-nav/.planet-switcher
+     兩條 sticky 列,三個疊在一起把可視範圍吃掉太多。把 padding/margin-bottom
+     都往下調(20px 22px → 12px 18px,margin-bottom 28px → 18px),文字本身
+     大小完全沒動,單純讓卡片包得更貼合文字,同一輪也把下面兩條 sticky 列的
+     padding 一起收緊(見各自的規則)。 */
   header {
     position: relative;
-    margin-bottom: 28px;
-    padding: 20px 22px;
-    border-radius: 16px;
+    margin-bottom: 18px;
+    padding: 12px 18px;
+    border-radius: 14px;
     overflow: hidden;
     background: linear-gradient(135deg, #171d33, #0d1220);
     border: 1px solid var(--line);
@@ -994,8 +1000,8 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     gap: 8px;
-    padding: 10px 2px;
-    margin: 0 -2px 18px;
+    padding: 6px 2px;
+    margin: 0 -2px 12px;
     background: var(--bg-deep);
     border-bottom: 1px solid var(--line);
     scrollbar-width: thin;
@@ -1004,7 +1010,7 @@
     font-family: 'Inter', sans-serif;
     font-size: 13px;
     font-weight: 600;
-    padding: 7px 14px;
+    padding: 6px 12px;
     border-radius: 999px;
     border: 1px solid var(--line);
     background: var(--bg-panel);
@@ -1026,8 +1032,8 @@
      and is never gated/hidden the way the others are (always useful, exactly
      like the 建設 pill it sits beside). */
   .section-nav-item.section-nav-top {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     display: flex;
     align-items: center;
@@ -1057,8 +1063,8 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     gap: 8px;
-    margin: 0 -2px 18px;
-    padding: 10px 2px;
+    margin: 0 -2px 12px;
+    padding: 6px 2px;
     position: sticky;
     top: var(--section-nav-height, 0px);
     z-index: 15;
@@ -1069,7 +1075,7 @@
   .planet-tab {
     font-family: 'Space Mono', monospace;
     font-size: 12px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: 8px;
     border: 1px solid var(--line);
     background: var(--bg-panel);
@@ -1251,7 +1257,7 @@
   .movement-entry.transport-in { border-left: 3px solid var(--crystal); background: #221a10; }
 
   @media (max-width: 480px) {
-    header { padding: 14px 16px; }
+    header { padding: 10px 14px; }
     .resources { grid-template-columns: 1fr; margin: -10px -4px 16px; }
     .resources.has-fleet { grid-template-columns: 1fr 1fr; }
     .attack-card select.target-input { flex-basis: 100%; }
