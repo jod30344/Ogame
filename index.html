@@ -889,6 +889,25 @@
     background: linear-gradient(180deg, rgba(11,18,32,0.97) 0%, rgba(11,18,32,0.94) 75%, rgba(11,18,32,0) 100%);
     backdrop-filter: blur(6px);
   }
+  /* 捲動時自動縮小置頂資源列,回頂端時變回原樣 — 使用者原話:「有沒有機會讓我
+     往下滑時，金屬、晶體、糧食跟艦隊的欄位縮小，往上到最頂時再變回原樣」。純視
+     覺開關:`updateResourcesBarCompact()`(搜尋該函式)只在 `#resources-bar` 這個
+     元素上加/拿掉 `.compact` class,不影響任何資料或既有的拖曳/CG 背景圖邏輯。
+     刻意只縮小卡片本身的內距與數字字級(靠 transition 做出平滑的縮放感),不隱藏
+     金屬/晶體/糧食三張卡片的任何文字內容;艦隊卡片則額外把細項清單
+     (`.fleet-top-grid`,包含偵察機/戰鬥機/運輸艦逐項列表)整個收起來,只留「艦隊」
+     標籤跟總數/上限徽章——這塊本來就是輔助細節,收合最省空間,捲回頂端會馬上還原。
+     刻意不套用在總覽的 `#dashboard-grand-totals`(不同 class,本來就不是常駐置頂
+     列,沒有「捲動中佔空間」的問題)。 */
+  .res-card { transition: padding 0.18s ease; }
+  .res-value { transition: font-size 0.18s ease; }
+  .resources.compact .res-card { padding: 8px 12px; }
+  .resources.compact .res-label { font-size: 10px; margin-bottom: 2px; }
+  .resources.compact .res-value { font-size: 15px; }
+  .resources.compact .res-rate { display: none; }
+  .resources.compact .fleet-top-header { margin-bottom: 0; }
+  .resources.compact .fleet-cap-summary { padding: 2px 9px; font-size: 12px; }
+  .resources.compact .fleet-top-grid { display: none; }
   .res-value.flash-success, .fleet-count.flash-success { animation: flashValueUp 0.6s ease; }
   .res-value.flash-danger, .fleet-count.flash-danger { animation: flashValueDown 0.6s ease; }
   @keyframes flashValueUp {
@@ -4559,6 +4578,25 @@
   }
   updateStickyOffsets();
   window.addEventListener('resize', updateStickyOffsets);
+
+  // 捲動時縮小置頂資源列,回頂端時變回原樣(見上面 `.resources.compact` CSS
+  // 規則自己的註解)。COMPACT_SCROLL_THRESHOLD 抓一個比 0 略高的值,單純是避免
+  // 頁面在最頂端附近抖動一兩像素就在原樣/縮小之間來回切換。用
+  // requestAnimationFrame 節流,而不是每個 scroll 事件都直接動 DOM class。
+  const COMPACT_SCROLL_THRESHOLD = 60;
+  let resourcesBarCompactTicking = false;
+  function updateResourcesBarCompact() {
+    resourcesBarCompactTicking = false;
+    const bar = document.getElementById('resources-bar');
+    if (!bar) return;
+    bar.classList.toggle('compact', window.scrollY > COMPACT_SCROLL_THRESHOLD);
+  }
+  window.addEventListener('scroll', () => {
+    if (resourcesBarCompactTicking) return;
+    resourcesBarCompactTicking = true;
+    requestAnimationFrame(updateResourcesBarCompact);
+  }, { passive: true });
+  updateResourcesBarCompact();
 
   document.querySelectorAll('.section-nav-item[data-nav-target]').forEach(btn => {
     btn.addEventListener('click', () => {
