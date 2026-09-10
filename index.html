@@ -9290,4 +9290,2244 @@
       const front = queue[0]; // already ordered by complete_at.asc from the query
       const buildingHtml = front
         ? `<span class="dash-queue-active">${(BUILDING_TYPES[front.building_type] || {}).name || front.building_type} ${front.target_level > 0 ? `→ LV${front.target_level}` : '拆除'}${queue.length > 1 ? `(還有 ${queue.length - 1} 項排隊中)` : ''} · ${dashboardEtaText(front.complete_at)}</span>`
-        : `<span 
+        : `<span class="dash-queue-idle">⚠ 建築閒置,可安排新工程</span>`;
+
+      // OPTIMIZATION ROUND addition: ship-production row, mirroring the
+      // building row above — only shown for a colony that actually HAS a
+      // shipyard (a colony with none isn't "idle" on this axis, it simply
+      // doesn't have this capability yet, so no warning is shown for it).
+      const hasShipyardHere = buildings.some(b => b.building_type === 'shipyard');
+      const shipQueue = shipQueueByPlanet[p.id] || [];
+      const shipFront = shipQueue[0];
+
+      // Per user request ("請系統判斷我每個星球的艦隊數量是否已達上限,不然我
+      // 造船廠閒置也不用通知我可安排生產") — an idle shipyard with no room left
+      // under this planet's own 艦隊上限 isn't actually actionable, so it
+      // shouldn't get the "⚠ 可安排新生產" nudge (or count toward idleCount/
+      // cardIdle below). Mirrors currentFleetTotal()'s exact accounting
+      // (home + exploring + building + colonizing + redeploying[out] +
+      // attacking[out] + transporting[out]) and fleetCapForHomesteadLevel(),
+      // the same formula buildShips() itself already enforces server-side —
+      // so this stays consistent with what actually blocks production,
+      // rather than inventing a separate/looser definition of "at cap".
+      const homesteadLevelHere = (buildings.find(b => b.building_type === 'homestead') || {}).level || 1;
+      const fleetCapHere = fleetCapForHomesteadLevel(homesteadLevelHere);
+      grandFleetCap += fleetCapHere;
+      const shipQueueTotal = shipQueue.reduce((sum, r) => sum + (r.count || 0), 0);
+      const fleetTotalHere = fleetHome + fleetExploring + shipQueueTotal
+        + (colonizeByPlanet[p.id] ? colonizeByPlanet[p.id].ships : 0)
+        + (redeployByPlanet[p.id] ? redeployByPlanet[p.id].ships : 0)
+        + (outAttackByPlanet[p.id] ? outAttackByPlanet[p.id].ships : 0)
+        + (outTransportByPlanet[p.id] ? outTransportByPlanet[p.id].ships : 0);
+      const atFleetCap = fleetTotalHere >= fleetCapHere;
+
+      const shipyardActionableIdle = hasShipyardHere && !shipFront && !atFleetCap;
+      const shipHtml = hasShipyardHere
+        ? `<div class="dash-ship-row">${shipFront
+            ? `<span class="dash-queue-active">${(SHIP_TYPES[shipFront.ship_type] || {}).name || shipFront.ship_type} ×${fmt(shipFront.count)} · ${dashboardEtaText(shipFront.complete_at)}</span>`
+            : (atFleetCap
+                ? `<span class="dash-queue-active">艦隊已達上限(${fmt(fleetTotalHere)}／${fmt(fleetCapHere)}),造船廠暫無需排產</span>`
+                : `<span class="dash-queue-idle">⚠ 造船廠閒置,可安排新生產</span>`)}</div>`
+        : '';
+
+      const cardIdle = !front && (!hasShipyardHere || shipyardActionableIdle);
+      if (cardIdle) idleCount++;
+
+      const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
+      const name = p.nickname ? p.nickname : `座標 ${p.coord}`;
+
+      const hasIntelCenterHere = buildings.some(b => b.building_type === 'intel_center');
+      if (hasShipyardHere && hasIntelCenterHere && !exploring) {
+        exploreIdlePlanets.push({ id: p.id, name });
+      }
+
+      // REVISION: outgoing-mission rows, folded directly into each planet's
+      // own card (see the big comment above `#dashboard-summary` in the HTML
+      // for why these used to be two standalone sections). 探索 is the only
+      // category with an "idle opportunity" state — the others are
+      // situational player actions, not something every eligible colony
+      // should nudge you toward starting.
+      const exploreRowHtml = exploring
+        ? missionGroupHtml('explore', exploring)
+        : (hasShipyardHere && hasIntelCenterHere
+            ? `<div class="dash-mission-row"><span class="dash-queue-idle">⚠ 尚未派遣探索,可考慮派遣艦隊</span></div>`
+            : '');
+      const colonizeRowHtml = missionGroupHtml('colonize', colonizeByPlanet[p.id]);
+      const redeployRowHtml = missionGroupHtml('redeploy', redeployByPlanet[p.id]);
+      const outAttackRowHtml = missionGroupHtml('attack', outAttackByPlanet[p.id]);
+      const outTransportRowHtml = missionGroupHtml('transport', outTransportByPlanet[p.id]);
+
+      // Per user request ("在家呈現綠色,探索呈現紅色,總計就正常灰色就好") —
+      // reordered to lead with the 總計／上限 headline, with the 在家/探索
+      // breakdown parenthesized right after in fixed semantic colors instead
+      // of the earlier near-cap red highlight on the whole line.
+      const fleetBreakdownParts = [`<span class="dash-fleet-home">在家 ${fmt(fleetHome)}</span>`];
+      if (fleetExploring > 0) fleetBreakdownParts.push(`<span class="dash-fleet-exploring">探索 ${fmt(fleetExploring)}</span>`);
+      const fleetBreakdownHtml = fleetBreakdownParts.join(' · ');
+
+      return `<div class="dash-planet-card${cardIdle ? ' idle' : ''}" data-planet-id="${p.id}">
+        <div class="dash-planet-thumb"><img src="${planetArtSrcFor(p.id)}" alt="" onerror="this.parentElement.style.display='none';"></div>
+        <div class="dash-planet-head">
+          <span class="dash-planet-name">${homeMark}${name}</span>
+          <div class="dash-card-actions">
+            <button class="dash-goto-btn" data-goto-planet="${p.id}" type="button">前往</button>
+            <!-- Per user request ("再前往按鈕下面多一個「運輸」的按鈕...也可以用
+                 拖曳的方式到其他星球...會出現問你要移防多少與運輸多少物資的畫面")
+                 — a plain click jumps to this planet and opens the 移防 tab
+                 directly (see the pointerup handler below); dragging this
+                 button onto ANOTHER card opens an in-page 移防 quantity modal
+                 with origin/destination already set. The mission this
+                 actually creates is 移防 (fleet+cargo between the player's OWN
+                 colonies, no approval needed) — labeled 運輸 here since that's
+                 the verb the user used, not to be confused with the existing
+                 「運輸」 nav pill (a different mechanic: a resource request to
+                 ANOTHER player's known planet, which needs their approval and
+                 isn't reachable from this own-colony card grid at all).
+                 Only rendered with 2+ owned planets — same gate the 移防
+                 pill itself uses (redeployVisible), since with only one
+                 planet there is no other card to redeploy to or from. -->
+            ${myPlanets.length > 1 ? `<button class="dash-transport-btn" data-transport-planet="${p.id}" type="button">運輸</button>` : ''}
+          </div>
+        </div>
+        <div class="dash-resource-row">
+          <span class="metal">金屬 +${fmt(metalRate)}/秒</span>
+          <span class="crystal">晶體 +${fmt(crystalRate)}/秒</span>
+          <span class="food">糧食 +${fmt(foodRate)}/秒</span>
+        </div>
+        <div class="dash-fleet-row">艦隊 總計 ${fmt(fleetTotalHere)}(${fleetBreakdownHtml})／上限 ${fmt(fleetCapHere)}</div>
+        <div class="dash-building-row">${buildingHtml}</div>
+        ${shipHtml}
+        ${exploreRowHtml}
+        ${colonizeRowHtml}
+        ${redeployRowHtml}
+        ${outAttackRowHtml}
+        ${outTransportRowHtml}
+      </div>`;
+    }).join('');
+
+    // CG 精美圖背景 — 跟 #resources-bar 的 4 張卡片共用同一組 art/resources/*.jpg
+    // (見 .res-card-bg 的 CSS 註解),onerror 同樣只藏自己跟緊接著的 overlay。
+    totalsEl.innerHTML = `
+      <div class="res-card metal">
+        <img class="res-card-bg" src="art/resources/metal.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="res-card-bg-overlay"></div>
+        <div class="res-card-content">
+          <div class="res-label">全文明金屬</div>
+          <div class="res-value">${fmt(grandMetalStock)}</div>
+          <div class="res-rate">+${fmt(grandMetalRate)} / 秒</div>
+        </div>
+      </div>
+      <div class="res-card crystal">
+        <img class="res-card-bg" src="art/resources/crystal.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="res-card-bg-overlay"></div>
+        <div class="res-card-content">
+          <div class="res-label">全文明晶體</div>
+          <div class="res-value">${fmt(grandCrystalStock)}</div>
+          <div class="res-rate">+${fmt(grandCrystalRate)} / 秒</div>
+        </div>
+      </div>
+      <div class="res-card food">
+        <img class="res-card-bg" src="art/resources/food.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="res-card-bg-overlay"></div>
+        <div class="res-card-content">
+          <div class="res-label">全文明糧食</div>
+          <div class="res-value">${fmt(grandFoodStock)}</div>
+          <div class="res-rate">+${fmt(grandFoodRate)} / 秒</div>
+        </div>
+      </div>
+      <div class="res-card fleet">
+        <img class="res-card-bg" src="art/resources/fleet.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="res-card-bg-overlay"></div>
+        <div class="res-card-content">
+          <div class="res-label">全文明艦隊</div>
+          <div class="res-value">${fmt(grandFleetHome + grandFleetExploring)}<span class="res-value-cap">／${fmt(grandFleetCap)}</span></div>
+          <div class="res-rate">在家 ${fmt(grandFleetHome)} · 探索中 ${fmt(grandFleetExploring)}</div>
+        </div>
+      </div>`;
+
+    // Snapshot for tickDashboardTotals() — see that function's own comment
+    // and dashboardTotalsSnapshot's declaration for why this exists (live
+    // per-500ms ticking between the ~8s-apart real fetches, matching how the
+    // normal resource bar already behaves for the currently-viewed planet).
+    dashboardTotalsSnapshot = {
+      metal: grandMetalStock, crystal: grandCrystalStock, food: grandFoodStock,
+      metalRate: grandMetalRate, crystalRate: grandCrystalRate, foodRate: grandFoodRate,
+      capturedAt: Date.now(),
+    };
+
+    // OPTIMIZATION ROUND addition: pending-action badge strip — a
+    // zero-reading-required "does anything need me right now" summary above
+    // everything else, so a player with many colonies doesn't have to scan
+    // every card just to find out nothing's wrong.
+    const badges = [];
+    if (attackRows.length > 0) badges.push(`<span class="dash-badge attack">⚠ ${attackRows.length} 個攻擊警報</span>`);
+    if (transportRows.length > 0) badges.push(`<span class="dash-badge transport">⚠ ${transportRows.length} 個運輸待審核</span>`);
+    if (idleCount > 0) badges.push(`<span class="dash-badge idle">⚠ ${idleCount} 個殖民地閒置</span>`);
+    if (exploreIdlePlanets.length > 0) badges.push(`<span class="dash-badge idle">⚠ ${exploreIdlePlanets.length} 個殖民地可派遣探索</span>`);
+    summaryEl.innerHTML = badges.join('');
+    summaryEl.classList.toggle('hidden', badges.length === 0);
+
+    const attackAlertsHtml = attackRows.map(m => {
+      const remainSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const remainText = remainSec > 0 ? `${formatDuration(remainSec)}後抵達` : '即將抵達';
+      return `<div class="dash-alert">
+        <span class="dash-alert-text">⚠ ${m.attacker_name} 正在攻擊<span class="dash-alert-planet">(${planetNameById[m.defender_planet_id] || '未知星球'} · ${remainText})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${m.defender_planet_id}" type="button">前往</button>
+      </div>`;
+    }).join('');
+    const transportAlertsHtml = transportRows.map(m => `<div class="dash-alert transport">
+        <span class="dash-alert-text">${m.attacker_name} 請求運輸,待你回應<span class="dash-alert-planet">(${planetNameById[m.defender_planet_id] || '未知星球'})</span></span>
+        <button class="dash-goto-btn" data-goto-planet="${m.defender_planet_id}" type="button">前往</button>
+      </div>`).join('');
+    alertsEl.innerHTML = attackAlertsHtml + transportAlertsHtml;
+
+    planetsEl.innerHTML = planetCardsHtml;
+
+    // Event delegation on the containers (rather than one listener per
+    // button) — same reasoning as every other renderXXX() in this file that
+    // rebuilds its container's innerHTML wholesale every refresh: cheaper
+    // to rebind twice per poll cycle than to leak one stale listener per
+    // button per planet per poll.
+    [alertsEl, planetsEl].forEach(container => {
+      container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
+          if (target) {
+            // REVISION: 總覽 is now a separate page — a 前往 click needs to
+            // leave it (revealing `#planet-sections` again) as well as
+            // switching the active planet, or the player would land on the
+            // right planet with the whole per-planet view still hidden.
+            exitDashboardView();
+            switchToPlanet(target);
+          }
+        });
+      });
+    });
+
+    // FEATURE: 拖曳移防 — per user request. pointerdown starts tracking; the
+    // actual click-vs-drag decision happens in onDashboardTransportPointerUp()
+    // based on whether the pointer moved past DASHBOARD_DRAG_THRESHOLD_PX
+    // before release, not from a separate 'click' listener (which would
+    // double-fire alongside the drag's own pointerup). See that function and
+    // openDashboardRedeployModal() just below renderDashboardOverview().
+    planetsEl.querySelectorAll('button[data-transport-planet]').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => {
+        const originPlanet = myPlanets.find(p => String(p.id) === String(btn.dataset.transportPlanet));
+        if (originPlanet) startDashboardTransportDrag(e, originPlanet, btn);
+      });
+    });
+  }
+
+  // ============================================================
+  // 拖曳移防 (drag-to-redeploy from 總覽) — per user request: "我想弄一個拖曳移
+  // 防與資源(艦隊、物資)的方式,再前往按鈕下面多一個「運輸」的按鈕,除了點即可以
+  // 跳往該星球的運輸畫面,也可以用拖曳的方式到其他星球(可能會有箭頭跟隨滑鼠),會
+  // 出現問你要移防多少與運輸多少物資的畫面,確定後會排入任務裡。" Confirmed via
+  // two follow-up AskUserQuestion rounds: (1) the quantity screen pops up
+  // in-place on 總覽 itself rather than navigating away, and (2) a plain
+  // click (no drag) jumps to that planet and opens the 移防 tab directly.
+  //
+  // The mission this actually creates is 移防 (redeploy fleet+cargo between
+  // the player's OWN colonies, no approval needed — see the existing
+  // #redeploy-section) — the button is labeled 運輸 because that's the verb
+  // the user used, not because this reuses the separate, pre-existing
+  // "運輸" mechanic (a resource REQUEST to another player's known planet,
+  // gated on their approval — see #transport-section). That mechanic isn't
+  // reachable from here at all: 總覽's card grid only ever lists the
+  // player's OWN planets, so a drag between two of its cards can only ever
+  // mean "move MY OWN fleet/cargo between MY OWN colonies," which is exactly
+  // what 移防 already is.
+  // ============================================================
+  const DASHBOARD_DRAG_THRESHOLD_PX = 6;
+  let dashboardDragState = null;       // set while a 運輸-button pointer is down; see startDashboardTransportDrag()
+  let dashboardRedeployContext = null; // { originPlanet, destPlanet } while the quantity modal is open
+
+  function startDashboardTransportDrag(e, originPlanet, btn) {
+    if (e.button !== undefined && e.button !== 0) return; // primary button/touch only
+    dashboardDragState = {
+      originPlanet,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+      sourceBtn: btn,
+      sourceCard: btn.closest('.dash-planet-card'),
+      lastTargetCard: null,
+    };
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* not critical if unsupported */ }
+    btn.addEventListener('pointermove', onDashboardTransportPointerMove);
+    btn.addEventListener('pointerup', onDashboardTransportPointerUp);
+    btn.addEventListener('pointercancel', onDashboardTransportPointerCancel);
+  }
+
+  function onDashboardTransportPointerMove(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (!state.dragging && Math.hypot(dx, dy) > DASHBOARD_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+      state.sourceBtn.classList.add('dragging');
+      state.sourceCard?.classList.add('drag-source-active');
+      document.getElementById('dashboard-drag-overlay')?.classList.remove('hidden');
+    }
+    if (!state.dragging) return;
+    e.preventDefault();
+
+    const originRect = state.sourceBtn.getBoundingClientRect();
+    const line = document.getElementById('dashboard-drag-line');
+    if (line) {
+      line.setAttribute('x1', originRect.left + originRect.width / 2);
+      line.setAttribute('y1', originRect.top + originRect.height / 2);
+      line.setAttribute('x2', e.clientX);
+      line.setAttribute('y2', e.clientY);
+    }
+
+    const hoveredEl = document.elementFromPoint(e.clientX, e.clientY);
+    const hoveredCard = hoveredEl ? hoveredEl.closest('.dash-planet-card') : null;
+    const isValidTarget = !!(hoveredCard && hoveredCard !== state.sourceCard);
+    if (state.lastTargetCard && state.lastTargetCard !== (isValidTarget ? hoveredCard : null)) {
+      state.lastTargetCard.classList.remove('drag-target-valid');
+    }
+    if (isValidTarget) {
+      hoveredCard.classList.add('drag-target-valid');
+      state.lastTargetCard = hoveredCard;
+    } else {
+      state.lastTargetCard = null;
+    }
+  }
+
+  function cleanupDashboardDrag() {
+    const state = dashboardDragState;
+    if (!state) return;
+    state.sourceBtn.removeEventListener('pointermove', onDashboardTransportPointerMove);
+    state.sourceBtn.removeEventListener('pointerup', onDashboardTransportPointerUp);
+    state.sourceBtn.removeEventListener('pointercancel', onDashboardTransportPointerCancel);
+    state.sourceBtn.classList.remove('dragging');
+    state.sourceCard?.classList.remove('drag-source-active');
+    state.lastTargetCard?.classList.remove('drag-target-valid');
+    document.getElementById('dashboard-drag-overlay')?.classList.add('hidden');
+    dashboardDragState = null;
+  }
+
+  function onDashboardTransportPointerCancel(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    cleanupDashboardDrag();
+  }
+
+  function onDashboardTransportPointerUp(e) {
+    const state = dashboardDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const wasDragging = state.dragging;
+    const targetCard = state.lastTargetCard;
+    const originPlanet = state.originPlanet;
+    cleanupDashboardDrag();
+
+    if (!wasDragging) {
+      // Per the user's own confirmed choice: a plain click/tap (never
+      // exceeded the drag threshold) jumps to that planet and opens 移防
+      // directly, rather than doing anything drag-related.
+      activateDashboardTransportClick(originPlanet);
+      return;
+    }
+    if (!targetCard) return; // dropped somewhere that isn't another card — no-op
+    const destPlanet = myPlanets.find(p => String(p.id) === String(targetCard.dataset.planetId));
+    if (!destPlanet) return;
+    openDashboardRedeployModal(originPlanet, destPlanet);
+  }
+
+  async function activateDashboardTransportClick(originPlanet) {
+    exitDashboardView();
+    await switchToPlanet(originPlanet);
+    // switchToPlanet() fires its own trailing pollUpdates() WITHOUT awaiting
+    // it (same fire-and-forget shape startGame() also uses — see this file's
+    // own note that pollUpdates() has no re-entrancy guard by design). Left
+    // alone, that pending call finishes sometime AFTER the click below and
+    // re-runs updateCurrentSectionHighlight() as part of its own visibility
+    // refresh, which re-scans scroll position and can silently steal the
+    // 移防 pill's "current" highlight back to whatever pill was current
+    // before this switch (caught by this feature's own Playwright test —
+    // navigation and the section itself becoming visible both worked, but
+    // the pill highlight flickered back to 建設 a moment later). Awaiting
+    // one more pollUpdates() cycle here settles that race before we click,
+    // for a one-off UI action — an extra full poll doesn't happen on every
+    // regular 8s tick, only on this specific click path.
+    await pollUpdates();
+    // Reuses the 移防 pill's own click handler (scroll-to + highlight)
+    // instead of duplicating that logic here.
+    document.querySelector('.section-nav-item[data-nav-target="redeploy-section"]')?.click();
+  }
+
+  function openDashboardRedeployModal(originPlanet, destPlanet) {
+    dashboardRedeployContext = { originPlanet, destPlanet };
+    const originName = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
+    const destName = destPlanet.nickname ? destPlanet.nickname : `座標 ${destPlanet.coord}`;
+    document.getElementById('dash-redeploy-title').textContent = `移防:${originName} → ${destName}`;
+    ['dbrd-mothership', 'dbrd-scout', 'dbrd-fighter', 'dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '0';
+    });
+    const msg = document.getElementById('dbrd-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    updateDashboardRedeployCargoEstimate();
+    document.getElementById('dash-redeploy-modal').classList.remove('hidden');
+  }
+
+  function closeDashboardRedeployModal() {
+    document.getElementById('dash-redeploy-modal')?.classList.add('hidden');
+    dashboardRedeployContext = null;
+  }
+
+  // Identical formula to updateRedeployCargoEstimate() (the page-level 移防
+  // form's own live estimate) — just wired to this modal's `dbrd-*` ids.
+  function updateDashboardRedeployCargoEstimate() {
+    const note = document.getElementById('dbrd-cargo-note');
+    if (!note) return;
+    const transport = parseInt(document.getElementById('dbrd-transport').value, 10) || 0;
+    const metal = Math.max(0, parseFloat(document.getElementById('dbrd-metal').value) || 0);
+    const crystal = Math.max(0, parseFloat(document.getElementById('dbrd-crystal').value) || 0);
+    const food = Math.max(0, parseFloat(document.getElementById('dbrd-food').value) || 0);
+    const capacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const loaded = metal + crystal + food;
+    note.textContent = `運輸艦可攜帶上限:${fmt(capacity)}(目前攜帶合計 ${fmt(loaded)},金屬+晶體+糧食共用容量)`;
+    const over = loaded > capacity;
+    note.classList.toggle('insufficient', over);
+    if (over) note.textContent += ` · 超過上限,請增加運輸艦或減少攜帶量`;
+  }
+  ['dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateDashboardRedeployCargoEstimate);
+  });
+  document.getElementById('dash-redeploy-cancel')?.addEventListener('click', closeDashboardRedeployModal);
+  document.getElementById('dash-redeploy-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'dash-redeploy-modal') closeDashboardRedeployModal();
+  });
+  document.getElementById('dash-redeploy-confirm')?.addEventListener('click', onDashboardRedeployConfirmClick);
+
+  async function onDashboardRedeployConfirmClick() {
+    if (!dashboardRedeployContext) return;
+    const { originPlanet, destPlanet } = dashboardRedeployContext;
+    const msg = document.getElementById('dbrd-msg');
+    msg.className = 'attack-msg';
+    const originLabel = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
+
+    const mothership = parseInt(document.getElementById('dbrd-mothership').value, 10) || 0;
+    const scout = parseInt(document.getElementById('dbrd-scout').value, 10) || 0;
+    const fighter = parseInt(document.getElementById('dbrd-fighter').value, 10) || 0;
+    const transport = parseInt(document.getElementById('dbrd-transport').value, 10) || 0;
+    const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-metal').value) || 0));
+    const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-crystal').value) || 0));
+    const food = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-food').value) || 0));
+
+    // Cheap pre-check against the dashboard's own (possibly up to ~8s stale —
+    // same staleness every other dashboard number already tolerates) cached
+    // planet data, purely for instant feedback. launchRedeployFromDashboard()
+    // below re-validates authoritatively against a FRESH read right before
+    // actually committing anything — same "cheap check first, fresh check
+    // right before commit" split onRedeployLaunchClick()/launchRedeploy()
+    // themselves already use for the page-level form.
+    if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership + scout + fighter + transport <= 0) { msg.textContent = '請至少指派 1 艘艦艇'; return; }
+    if (mothership > (originPlanet.mothership_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.mothership_count || 0} 艘殖民母艦`; return; }
+    if (scout > (originPlanet.scout_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.scout_count || 0} 艘偵察機`; return; }
+    if (fighter > (originPlanet.fighter_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.fighter_count || 0} 艘戰鬥機`; return; }
+    if (transport > (originPlanet.transport_count || 0)) { msg.textContent = `${originLabel}只有 ${originPlanet.transport_count || 0} 艘運輸艦`; return; }
+    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const cargoLoaded = metal + crystal + food;
+    if (cargoLoaded > cargoCapacity) {
+      msg.textContent = `${transport} 艘運輸艦最多能載 ${fmt(cargoCapacity)}(金屬+晶體+糧食合計),目前共 ${fmt(cargoLoaded)},請增加運輸艦或減少攜帶量`;
+      return;
+    }
+    if (metal > (Number(originPlanet.metal) || 0)) { msg.textContent = `金屬不足,目前只有 ${fmt(originPlanet.metal)}`; return; }
+    if (crystal > (Number(originPlanet.crystal) || 0)) { msg.textContent = `晶體不足,目前只有 ${fmt(originPlanet.crystal)}`; return; }
+
+    const travelSec = travelSeconds(originPlanet.coord, destPlanet.coord);
+    const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+    const totalFoodNeeded = travelFoodCost + food;
+    if (totalFoodNeeded > (Number(originPlanet.food) || 0)) {
+      msg.textContent = `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(originPlanet.food)})`;
+      return;
+    }
+
+    const confirmBtn = document.getElementById('dash-redeploy-confirm');
+    confirmBtn.disabled = true;
+    let result;
+    try {
+      result = await launchRedeployFromDashboard(originPlanet, destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec });
+    } finally {
+      confirmBtn.disabled = false;
+    }
+    if (!result.ok) { msg.textContent = result.message; return; }
+
+    closeDashboardRedeployModal();
+    showToast(`艦隊已從${originLabel}出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    await loadDashboardOverview();
+  }
+
+  // Dashboard-drag counterpart to launchRedeploy() (the page-level 移防
+  // form's own launch function, further below). launchRedeploy()/
+  // onRedeployLaunchClick() both read and write the GLOBAL `planet`/
+  // `localMetal`/`localCrystal`/`localFood` — correct for that form, which
+  // only ever launches FROM whichever planet is currently active, but wrong
+  // here since a dashboard drag can originate from ANY owned planet, active
+  // or not, while the player stays on 總覽 the whole time (never switches
+  // the active planet). Two branches:
+  //   - origin IS the active planet: mutate the exact same globals
+  //     launchRedeploy() would (kept inline here, not delegated, so a
+  //     validation failure surfaces in THIS modal's `#dbrd-msg` instead of
+  //     the page-level form's `#redeploy-msg` element, which is off-page/
+  //     hidden while 總覽 is active and would otherwise swallow the message).
+  //   - origin is a DIFFERENT, currently-inactive planet: fetch that
+  //     planet's row fresh (same "validate against a fresh read immediately
+  //     before commit" standard fetchDestinationFleetStatus() already holds
+  //     itself to) and PATCH its ship/resource counts directly — deliberately
+  //     bypassing localMetal/saveToServer() (which only ever represent the
+  //     ACTIVE planet) so the active planet's own background tick() can
+  //     never race with or silently clobber this write.
+  async function launchRedeployFromDashboard(originPlanet, destPlanet, amounts) {
+    const { mothership, scout, fighter, transport, metal, crystal, food, travelSec } = amounts;
+    const totalToSend = mothership + scout + fighter + transport;
+
+    let status;
+    try {
+      status = await fetchDestinationFleetStatus(destPlanet.id);
+    } catch (err) {
+      console.error('Fetch destination fleet status error:', err);
+      return { ok: false, message: '無法確認目的地艦隊狀態,請稍後再試' };
+    }
+    if (!status) return { ok: false, message: '找不到目的地殖民地資料' };
+    if (status.total + totalToSend > status.cap) {
+      return { ok: false, message: `目的地艦隊已接近上限(${fmt(status.total)}/${fmt(status.cap)}),加派 ${fmt(totalToSend)} 艘會超過上限,請減少派遣數量` };
+    }
+
+    const isActivePlanet = planet && String(planet.id) === String(originPlanet.id);
+    let originId, originName, originCoord;
+
+    if (isActivePlanet) {
+      if (mothership > (planet.mothership_count || 0)) return { ok: false, message: `你在家只有 ${planet.mothership_count || 0} 艘殖民母艦` };
+      if (scout > (planet.scout_count || 0)) return { ok: false, message: `你在家只有 ${planet.scout_count || 0} 艘偵察機` };
+      if (fighter > (planet.fighter_count || 0)) return { ok: false, message: `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機` };
+      if (transport > (planet.transport_count || 0)) return { ok: false, message: `你在家只有 ${planet.transport_count || 0} 艘運輸艦` };
+      if (metal > localMetal) return { ok: false, message: `金屬不足,目前只有 ${fmt(localMetal)}` };
+      if (crystal > localCrystal) return { ok: false, message: `晶體不足,目前只有 ${fmt(localCrystal)}` };
+      const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+      if (travelFoodCost + food > localFood) {
+        return { ok: false, message: `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${travelFoodCost + food}(現有 ${Math.floor(localFood)})` };
+      }
+
+      planet.mothership_count = (planet.mothership_count || 0) - mothership;
+      planet.scout_count = (planet.scout_count || 0) - scout;
+      planet.fighter_count = (planet.fighter_count || 0) - fighter;
+      planet.transport_count = (planet.transport_count || 0) - transport;
+      localMetal -= metal;
+      localCrystal -= crystal;
+      localFood -= travelFoodCost;
+      localFood -= food;
+      renderResources();
+      if (metal > 0) flashResource('metal-value', 'danger');
+      if (crystal > 0) flashResource('crystal-value', 'danger');
+      if (food > 0) flashResource('food-value', 'danger');
+      await saveToServer();
+      renderFleetTopBar();
+      originId = planet.id; originName = planet.player_name; originCoord = planet.coord;
+    } else {
+      let originFresh;
+      try {
+        const rows = await restRequest(`planets?id=eq.${originPlanet.id}&select=*`);
+        originFresh = rows && rows[0];
+      } catch (err) {
+        console.error('Fetch origin planet error:', err);
+        return { ok: false, message: '無法確認來源星球狀態,請稍後再試' };
+      }
+      if (!originFresh) return { ok: false, message: '找不到來源殖民地資料' };
+      const originLabel = originFresh.nickname ? originFresh.nickname : `座標 ${originFresh.coord}`;
+      if (mothership > (originFresh.mothership_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.mothership_count || 0} 艘殖民母艦` };
+      if (scout > (originFresh.scout_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.scout_count || 0} 艘偵察機` };
+      if (fighter > (originFresh.fighter_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.fighter_count || 0} 艘戰鬥機` };
+      if (transport > (originFresh.transport_count || 0)) return { ok: false, message: `${originLabel}只有 ${originFresh.transport_count || 0} 艘運輸艦` };
+      if (metal > (Number(originFresh.metal) || 0)) return { ok: false, message: `金屬不足,目前只有 ${fmt(originFresh.metal)}` };
+      if (crystal > (Number(originFresh.crystal) || 0)) return { ok: false, message: `晶體不足,目前只有 ${fmt(originFresh.crystal)}` };
+      const travelFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+      const totalFoodNeeded = travelFoodCost + food;
+      if (totalFoodNeeded > (Number(originFresh.food) || 0)) {
+        return { ok: false, message: `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(originFresh.food)})` };
+      }
+
+      try {
+        await restRequest(`planets?id=eq.${originFresh.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            mothership_count: (originFresh.mothership_count || 0) - mothership,
+            scout_count: (originFresh.scout_count || 0) - scout,
+            fighter_count: (originFresh.fighter_count || 0) - fighter,
+            transport_count: (originFresh.transport_count || 0) - transport,
+            metal: (Number(originFresh.metal) || 0) - metal,
+            crystal: (Number(originFresh.crystal) || 0) - crystal,
+            food: (Number(originFresh.food) || 0) - travelFoodCost - food,
+          }),
+        });
+      } catch (err) {
+        console.error('Patch origin planet error:', err);
+        return { ok: false, message: '扣除來源星球艦隊/資源失敗,請稍後再試' };
+      }
+
+      // Keep the in-memory myPlanets snapshot consistent with what was just
+      // PATCHed, so the dashboard's very next render (right after this
+      // resolves) doesn't show stale pre-deduction numbers for a few seconds.
+      const idx = myPlanets.findIndex(mp => String(mp.id) === String(originFresh.id));
+      if (idx >= 0) {
+        myPlanets[idx] = {
+          ...myPlanets[idx],
+          mothership_count: (originFresh.mothership_count || 0) - mothership,
+          scout_count: (originFresh.scout_count || 0) - scout,
+          fighter_count: (originFresh.fighter_count || 0) - fighter,
+          transport_count: (originFresh.transport_count || 0) - transport,
+          metal: (Number(originFresh.metal) || 0) - metal,
+          crystal: (Number(originFresh.crystal) || 0) - crystal,
+          food: (Number(originFresh.food) || 0) - travelFoodCost - food,
+        };
+      }
+      originId = originFresh.id; originName = originFresh.player_name; originCoord = originFresh.coord;
+    }
+
+    const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
+    try {
+      await restRequest('redeploy_missions', {
+        method: 'POST',
+        body: JSON.stringify({
+          player_name: originName,
+          origin_planet_id: originId,
+          destination_planet_id: destPlanet.id,
+          destination_coord: destPlanet.coord,
+          mothership_ships_sent: mothership,
+          scout_ships_sent: scout,
+          fighter_ships_sent: fighter,
+          transport_ships_sent: transport,
+          metal_sent: metal,
+          crystal_sent: crystal,
+          food_sent: food,
+          launched_at: new Date().toISOString(),
+          arrival_time: arrivalTime,
+          resolved: false,
+        }),
+      });
+    } catch (err) {
+      console.error('Post redeploy mission error:', err);
+      return { ok: false, message: '艦隊/資源已扣除,但任務建立失敗,請稍後重新整理確認狀態' };
+    }
+
+    return { ok: true };
+  }
+
+  // ============================================================
+  // 拖曳資源到其他星球 (drag-to-redeploy from the resource bar) — per user
+  // request, a follow-up to 總覽's own drag-to-redeploy feature above: "我很
+  // 喜歡拖曳的功能,請幫我在每個星球的金屬、晶體、糧食,也弄一個運輸,讓他們可以
+  // 拖曳到上面露比一號、二號的星球上。" This is the same 移防 mechanic, just
+  // triggered from the per-planet page's sticky `#resources-bar` cards
+  // instead of a 總覽 card's 運輸 button, and dropped onto `.planet-tab`
+  // pills instead of other 總覽 cards. Confirmed via AskUserQuestion: (1) the
+  // SAME `#dash-redeploy-modal` used by 總覽's own drag reopens here too
+  // (rather than a separate resource-only modal), with the dragged
+  // resource's own field pre-filled as a starting point and every other
+  // field left for the player to fill in themselves; (2) the whole resource
+  // card is the drag handle (no separate icon needed, unlike 總覽's cards,
+  // which needed a dedicated 運輸 button so a plain click could still mean
+  // "go to that planet's page" — these resource cards had no click behavior
+  // to preserve, so the whole card can safely BE the handle).
+  //
+  // Since this page is always showing exactly one ACTIVE planet, the origin
+  // is always the global `planet` object — never another, inactive one — so
+  // this reuses openDashboardRedeployModal()/launchRedeployFromDashboard()
+  // as-is rather than duplicating that modal/launch logic: passing the
+  // literal global `planet` as originPlanet makes
+  // launchRedeployFromDashboard()'s own `isActivePlanet` check true, which
+  // routes it through that function's "mutate the live globals directly"
+  // branch — exactly the behavior the page-level 移防 form itself uses.
+  // ============================================================
+  const RESOURCE_DRAG_THRESHOLD_PX = 6;
+  let resourceDragState = null; // set while a resource-card pointer is down
+
+  function startResourceDrag(e, resourceType, card) {
+    if (!planet) return;
+    if (e.button !== undefined && e.button !== 0) return; // primary button/touch only
+    resourceDragState = {
+      resourceType,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+      sourceCard: card,
+      lastTargetTab: null,
+    };
+    try { card.setPointerCapture(e.pointerId); } catch (err) { /* not critical if unsupported */ }
+    card.addEventListener('pointermove', onResourceDragMove);
+    card.addEventListener('pointerup', onResourceDragUp);
+    card.addEventListener('pointercancel', onResourceDragCancel);
+  }
+
+  function onResourceDragMove(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (!state.dragging && Math.hypot(dx, dy) > RESOURCE_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+      state.sourceCard.classList.add('dragging');
+      document.getElementById('dashboard-drag-overlay')?.classList.remove('hidden');
+    }
+    if (!state.dragging) return;
+    e.preventDefault();
+
+    const originRect = state.sourceCard.getBoundingClientRect();
+    const line = document.getElementById('dashboard-drag-line');
+    if (line) {
+      line.setAttribute('x1', originRect.left + originRect.width / 2);
+      line.setAttribute('y1', originRect.top + originRect.height / 2);
+      line.setAttribute('x2', e.clientX);
+      line.setAttribute('y2', e.clientY);
+    }
+
+    const hoveredEl = document.elementFromPoint(e.clientX, e.clientY);
+    const hoveredTab = hoveredEl ? hoveredEl.closest('.planet-tab[data-planet-id]') : null;
+    const isValidTarget = !!(hoveredTab && String(hoveredTab.dataset.planetId) !== String(planet.id));
+    if (state.lastTargetTab && state.lastTargetTab !== (isValidTarget ? hoveredTab : null)) {
+      state.lastTargetTab.classList.remove('drag-target-valid');
+    }
+    if (isValidTarget) {
+      hoveredTab.classList.add('drag-target-valid');
+      state.lastTargetTab = hoveredTab;
+    } else {
+      state.lastTargetTab = null;
+    }
+  }
+
+  function cleanupResourceDrag() {
+    const state = resourceDragState;
+    if (!state) return;
+    state.sourceCard.removeEventListener('pointermove', onResourceDragMove);
+    state.sourceCard.removeEventListener('pointerup', onResourceDragUp);
+    state.sourceCard.removeEventListener('pointercancel', onResourceDragCancel);
+    state.sourceCard.classList.remove('dragging');
+    state.lastTargetTab?.classList.remove('drag-target-valid');
+    document.getElementById('dashboard-drag-overlay')?.classList.add('hidden');
+    resourceDragState = null;
+  }
+
+  function onResourceDragCancel(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    cleanupResourceDrag();
+  }
+
+  function onResourceDragUp(e) {
+    const state = resourceDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const wasDragging = state.dragging;
+    const targetTab = state.lastTargetTab;
+    const resourceType = state.resourceType;
+    cleanupResourceDrag();
+
+    // Below-threshold pointerdown+up (a plain click) is a no-op — these
+    // resource cards were purely informational before this feature and stay
+    // that way for a non-drag click; only an actual drag-and-drop onto
+    // another planet's tab does anything.
+    if (!wasDragging || !targetTab) return;
+    const destPlanet = myPlanets.find(p => String(p.id) === String(targetTab.dataset.planetId));
+    if (!destPlanet || !planet) return;
+    openResourceRedeployModal(planet, destPlanet, resourceType);
+  }
+
+  // REVISION: also draggable from #fleet-top-card (per user follow-up
+  // request: "我覺得艦隊也可以透過這個方式直接移防,幫我加進去") — same drag
+  // mechanism, just a 4th card/resourceType ('fleet' alongside metal/
+  // crystal/food). See openResourceRedeployModal()'s 'fleet' branch below
+  // for what dragging this one pre-fills.
+  document.querySelectorAll('#resources-bar .res-card.metal, #resources-bar .res-card.crystal, #resources-bar .res-card.food, #resources-bar .res-card.fleet').forEach(card => {
+    const resourceType = card.classList.contains('metal') ? 'metal'
+      : card.classList.contains('crystal') ? 'crystal'
+      : card.classList.contains('food') ? 'food'
+      : 'fleet';
+    card.addEventListener('pointerdown', (e) => startResourceDrag(e, resourceType, card));
+  });
+
+  // Opens the same 移防 modal 總覽's own drag feature uses, then pre-fills
+  // ONLY whatever was actually dragged — every other field is left at
+  // openDashboardRedeployModal()'s normal all-zero default for the player to
+  // fill in themselves, per the user's own confirmed choice.
+  //
+  // - metal/crystal/food: pre-fills that one resource field to HALF of the
+  //   current stock (floored), not the full amount — a redeploy also burns
+  //   some food for the trip itself on top of whatever's loaded as cargo,
+  //   so defaulting 糧食 to 100% of current stock would leave zero headroom
+  //   for that travel cost and fail validation the moment the player tried
+  //   to confirm without first lowering it. A fixed 50% leaves that
+  //   headroom automatically (as well as being a more conservative "don't
+  //   empty the whole stockpile in one drag" default for 金屬/晶體 too).
+  //   Also defaults the transport count to just enough to carry that
+  //   amount (capped at how many transport ships are actually on hand), so
+  //   the cargo-capacity note starts clean instead of immediately warning
+  //   about 0 capacity.
+  // - fleet: pre-fills ALL FOUR ship-count fields to half of each type's
+  //   own home count (same 50% convention, for the same "don't empty
+  //   everything in one drag, but still hand the player a real starting
+  //   point" reasoning) — the whole 艦隊 card covers every ship type at
+  //   once, unlike the single-resource cards, so there's no one field to
+  //   single out. Resource fields stay 0: dragging the fleet card is about
+  //   moving ships, not cargo — a player who also wants to send resources
+  //   can still fill those in by hand, or drag one of the resource cards
+  //   into the SAME already-open modal afterward (dashboardRedeployContext
+  //   stays set until the modal closes, so a second drag just re-fills the
+  //   one new field on top of what's already there).
+  function openResourceRedeployModal(originPlanet, destPlanet, resourceType) {
+    dismissDragHint(); // an actual completed drag proves the feature was found
+    openDashboardRedeployModal(originPlanet, destPlanet);
+    if (resourceType === 'fleet') {
+      ['mothership', 'scout', 'fighter', 'transport'].forEach(type => {
+        const field = document.getElementById(`dbrd-${type}`);
+        if (!field) return;
+        const home = Number(originPlanet[`${type}_count`]) || 0;
+        field.value = String(Math.floor(home * 0.5));
+      });
+      updateDashboardRedeployCargoEstimate();
+      return;
+    }
+    const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    const amount = Math.floor((Number(originPlanet[resourceType]) || 0) * 0.5);
+    field.value = String(amount);
+    const perShip = SHIP_TYPES.transport.cargoCapacity;
+    if (amount > 0 && perShip > 0) {
+      const neededTransports = Math.min(originPlanet.transport_count || 0, Math.ceil(amount / perShip));
+      const transportField = document.getElementById('dbrd-transport');
+      if (transportField) transportField.value = String(neededTransports);
+    }
+    updateDashboardRedeployCargoEstimate();
+  }
+
+  // ============================================================
+  // 拖曳移防提示條 (discoverability) — per the user's own explicit worry
+  // ("我也擔心會不會不太直觀,導致玩家不清楚有這個功能"): a cursor:grab and a
+  // small corner glyph (.drag-hint-icon, added to the 4 draggable cards'
+  // markup above) are both easy to never notice on their own, especially
+  // since nothing on this page has ever been draggable before this feature.
+  // This banner spells the feature out in words the first time a
+  // multi-planet account sees this page, and goes away for good — via its
+  // own ✕ button, OR automatically the first time the player actually
+  // completes a drag (see openResourceRedeployModal() above) — whichever
+  // happens first. Persisted in localStorage (same best-effort
+  // try/catch-and-ignore pattern as saveSession()/loadSavedSession(), since
+  // a private window or blocked storage should just mean "the hint shows
+  // again," never a crash) so it stays dismissed across future logins on
+  // this same browser.
+  // ============================================================
+  const DRAG_HINT_DISMISSED_KEY = 'space_mining_drag_hint_dismissed_v1';
+  function isDragHintDismissed() {
+    try { return localStorage.getItem(DRAG_HINT_DISMISSED_KEY) === '1'; } catch (err) { return false; }
+  }
+  function dismissDragHint() {
+    try { localStorage.setItem(DRAG_HINT_DISMISSED_KEY, '1'); } catch (err) { /* best-effort only */ }
+    document.getElementById('drag-hint-banner')?.classList.add('hidden');
+  }
+  // Re-checked from renderPlanetSwitcher() (called on login, every colony
+  // switch, and whenever the owned-planet count changes) — the same trigger
+  // set that function's own doc-comment already relies on for keeping the
+  // tab strip itself in sync, so this piggybacks rather than adding new call
+  // sites. Only ever worth showing once there's actually a second planet to
+  // drag onto (myPlanets.length > 1 — the same gate the tab strip and 移防
+  // pill itself already use).
+  function updateDragHintVisibility() {
+    const banner = document.getElementById('drag-hint-banner');
+    if (!banner) return;
+    banner.classList.toggle('hidden', myPlanets.length <= 1 || isDragHintDismissed());
+  }
+  document.getElementById('drag-hint-dismiss')?.addEventListener('click', dismissDragHint);
+
+  // ============================================================
+  // Known Planets (已知星球) — a per-player registry (keyed by
+  // owner_player_name, not planet_id — one journal shared across all of a
+  // player's colonies), populated by exploration discoveries and kept fresh
+  // via recon missions. Only visible with a standing 戰情中心 (see
+  // hasIntelCenter()/updateIntelSectionVisibility()).
+  // ============================================================
+  async function loadKnownPlanets() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(
+        `known_planets?owner_player_name=eq.${encodeURIComponent(planet.player_name)}&select=*&order=discovered_at.desc`
+      );
+      knownPlanetRows = rows || [];
+      renderKnownPlanets();
+      populateTargetSelectors();
+      updateActionSectionVisibility();
+    } catch (err) {
+      console.error('Load known planets error:', err);
+    }
+  }
+
+  // 攻擊/運輸的目標不再是自由輸入的玩家代號——你得先透過探索或偵查真正發現過
+  // 對方,他們才會出現在這兩份下拉選單裡。兩份選單都直接讀 knownPlanetRows(不
+  // 受戰情中心是否已蓋的影響——「知道是誰」來自探索本身,「知道多強」才需要戰
+  // 情中心),依 target_player_name 去重,因為攻擊/運輸目前都是打對方的主星,同
+  // 一位玩家在哪個座標被發現不影響目標。每次重建都保留使用者已選的值(如果它仍
+  // 在清單裡),避免每 8 秒的輪詢把使用者選到一半的下拉選單重置掉。
+  // Until at least one planet has actually been discovered, the target picker for
+  // 攻擊/運輸 is NOT rendered as a dropdown at all — per explicit user request, an
+  // empty list shouldn't look like something there's a choice to make. Instead the
+  // real <select> stays hidden and a plain, non-interactive placeholder div (same
+  // visual slot, no arrow, not clickable) shows "尚未發現任何星球" in its place. Once
+  // a known planet exists, the placeholder hides and the real, functional dropdown
+  // takes over.
+  // 攻擊的目標名單現在也包含已發現的 NPC(侵略一個 NPC 就是走這同一份下拉選
+  // 單/同一個 executeAttack() 流程),運輸的目標名單則仍然只限玩家——把資源送
+  //給 NPC 不是一個機制,商貿(known-planets 卡片上 NPC 專屬的按鈕)才是 NPC 對
+  // 應的動作。
+  function populateTargetSelectors() {
+    const attackTargetNames = [...new Set(
+      knownPlanetRows.filter(kp => kp.target_type === 'player' || kp.target_type === 'npc').map(kp => kp.target_player_name)
+    )];
+    const transportTargetNames = [...new Set(
+      knownPlanetRows.filter(kp => kp.target_type === 'player').map(kp => kp.target_player_name)
+    )];
+    [['target-name', attackTargetNames], ['transport-target-name', transportTargetNames]].forEach(([id, names]) => {
+      const select = document.getElementById(id);
+      const placeholderEl = document.getElementById(`${id}-placeholder`);
+      if (!select) return;
+      const prevValue = select.value;
+      const hasKnown = names.length > 0;
+      select.innerHTML = `<option value="">請選擇已知玩家...</option>` +
+        names.map(name => `<option value="${name}">${name}</option>`).join('');
+      if (names.includes(prevValue)) select.value = prevValue;
+      select.classList.toggle('hidden', !hasKnown);
+      if (placeholderEl) placeholderEl.classList.toggle('hidden', hasKnown);
+    });
+  }
+
+  function renderKnownPlanets() {
+    const container = document.getElementById('known-planets-list');
+    if (!container) return;
+    const capBanner = document.getElementById('known-planets-cap-banner');
+
+    if (knownPlanetRows.length === 0) {
+      container.innerHTML = '<div class="battle-empty">尚未發現任何星球</div>';
+      if (capBanner) capBanner.classList.add('hidden');
+      return;
+    }
+
+    // 殖民地數量上限提示 — 使用者原話:「不用每發現一個殖民地就提醒一次」。
+    // 完整說明(含目前 X/Y 顆數字)只在這裡算一次、顯示一次,下面每一列已滿的
+    // 空星球卡片只會秀一句精簡版(見下方 colonizeBtn 的 capReached 分支)。
+    const capReached = hasReachedColonyCap();
+    const hasEmptyDiscovered = knownPlanetRows.some(kp => kp.target_type === 'empty');
+    if (capBanner) {
+      capBanner.classList.toggle('hidden', !(capReached && hasEmptyDiscovered));
+      if (capReached && hasEmptyDiscovered) capBanner.textContent = colonyCapLockedMessageText();
+    }
+
+    // 戰情中心等級決定已知星球能看到多少偵查情報,而不是蓋幾間——LV1 只看得到
+    // 文明等級(營地等級),LV2 加上艦隊數量,LV3 再加上防空炮塔戰力。升級一間現
+    // 有的戰情中心,馬上就能看到已經偵查過的星球揭露更多欄位,不必重新派出偵察機。
+    const myIntelLevel = intelCenterLevel();
+    container.innerHTML = knownPlanetRows.map(kp => {
+      const npcPlanet = kp.target_type === 'npc' ? npcPlanetRows.find(np => np.coord === kp.coord) : null;
+      const npcArchetype = npcPlanet ? (NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler) : null;
+      const typeLabel = kp.target_type === 'player' ? `玩家「${kp.target_player_name}」`
+        : kp.target_type === 'npc' ? `NPC「${kp.target_player_name}」${npcArchetype ? `(${npcArchetype.name})` : ''}`
+        : '無人殖民地';
+      let intelLine;
+      if (kp.target_type === 'npc') {
+        // Friendliness lives in npc_reputation (per-player), not on this
+        // known_planets row — always read live rather than cached, since
+        // 商貿/attacking changes it in real time without a fresh recon.
+        const isPirate = npcPlanet && npcPlanet.npc_archetype === 'pirate';
+        // 遺跡 planets never get a real npc_reputation row (see
+        // ensureNpcReputation()'s own comment) — always-hostile/attack-only,
+        // same "no reputation mechanic at all" treatment as a pirate, just
+        // with its own distinct label.
+        const isRuins = npcPlanet && npcPlanet.npc_archetype === 'ruins';
+        const rep = npcPlanet ? npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id)) : null;
+        const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
+        const isHostile = isPirate || isRuins || friendliness <= HOSTILE_FRIENDLINESS_THRESHOLD;
+        const statusLabel = isPirate ? '海盜·永遠敵對'
+          : isRuins ? '遺跡·封印古代兵器'
+          : isHostile ? `敵對(${friendliness})`
+          : friendliness >= FRIENDLY_FRIENDLINESS_THRESHOLD ? `友好(${friendliness})`
+          : `中立(${friendliness})`;
+        const lines = [`友好度:${statusLabel}`];
+        if (isHostile) lines.push(`<span class="intel-hint">牠可能隨時派艦來襲,記得留意防禦</span>`);
+        if (npcPlanet) lines.push(`上次已知兵力:戰鬥機 ${fmt(npcPlanet.fighter_count || 0)}`);
+        intelLine = lines.join('<br>');
+      } else if (!kp.last_scouted_at) {
+        intelLine = '尚未偵查過,情報未知';
+      } else {
+        const lines = [`上次偵查:${new Date(kp.last_scouted_at).toLocaleString('zh-TW')}`];
+        if (myIntelLevel >= 1) lines.push(`文明等級:營地 LV${kp.last_homestead_level || 1}`);
+        if (myIntelLevel >= 2) lines.push(`戰鬥機 ${fmt(kp.last_fighter_count || 0)} · 運輸艦 ${fmt(kp.last_transport_count || 0)} · 偵察機 ${fmt(kp.last_scout_count || 0)}`);
+        if (myIntelLevel >= 3) lines.push(`防空炮塔 ${fmt(kp.last_turret_count || 0)} 座 · 總防空戰力約 ${fmt(kp.last_turret_power || 0)}`);
+        if (myIntelLevel < 3) lines.push(`<span class="intel-hint">戰情中心升級可解鎖更多情報欄位(目前 LV${myIntelLevel})</span>`);
+        intelLine = lines.join('<br>');
+      }
+      const reconGroup = `<div class="ship-input-group known-recon-group">
+        <input type="number" class="ship-input known-recon-scout-input" data-coord="${kp.coord}" min="1" value="1">
+        <button class="max-btn" data-recon="${kp.coord}" type="button">偵查</button>
+      </div>`;
+      const transportBtn = kp.target_type === 'player'
+        ? `<button class="max-btn" data-transport-to="${kp.target_player_name}" type="button">運輸</button>` : '';
+      const invadeBtn = (kp.target_type === 'player' || kp.target_type === 'npc')
+        ? `<button class="attack-btn" data-invade-to="${kp.target_player_name}" type="button">侵略</button>` : '';
+      // 商貿: only offered for a non-pirate NPC that isn't currently
+      // hostile — per explicit user request, trading is how friendliness is
+      // actively earned, but it's withheld once an NPC views the player as
+      // an enemy (attack it first, then it takes real goodwill to recover —
+      // except a pirate, which never offers this option at all).
+      let tradeBtn = '';
+      if (kp.target_type === 'npc' && npcPlanet && npcPlanet.npc_archetype !== 'pirate' && npcPlanet.npc_archetype !== 'ruins') {
+        const rep = npcReputationRows.find(r => String(r.npc_planet_id) === String(npcPlanet.id));
+        const friendliness = rep ? rep.friendliness : (npcArchetype ? npcArchetype.initialFriendliness : 0);
+        if (friendliness > HOSTILE_FRIENDLINESS_THRESHOLD) {
+          tradeBtn = `<button class="max-btn" data-trade="${npcPlanet.coord}" type="button">商貿</button>`;
+        }
+      }
+      // Same double-launch guard as the exploration log: a colonization
+      // mission targeting this coordinate stays in colonizationRows (and
+      // this known_planets row stays around) for the whole flight, only
+      // resolving — and deleting this row — on arrival. Without checking
+      // for an already-in-flight mission here, the 殖民 button would keep
+      // showing and let the player launch a second one to the same coord.
+      const pendingColonize = colonizationRows.find(c => c.target_coord === kp.coord);
+      let colonizeBtn = '';
+      if (kp.target_type === 'empty' && pendingColonize) {
+        const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
+        const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
+        colonizeBtn = `<div class="log-loot">殖民艦隊已出發,${etaText}</div>`;
+      } else if (kp.target_type === 'empty' && capReached) {
+        // Same account-wide colony-cap gate as the exploration log — but
+        // per-row this is now just a short compact note, NOT the full
+        // explanatory sentence (that's shown once, above, as
+        // #known-planets-cap-banner) — see the user-feedback comment on
+        // capReached above.
+        colonizeBtn = `<div class="log-loot colonize-locked">🔒 已達殖民上限</div>`;
+      } else if (kp.target_type === 'empty' && (planet.mothership_count || 0) < 1) {
+        // Same mothership gate as the exploration log — the known-planet
+        // entry itself stays listed either way, only the button is withheld.
+        colonizeBtn = `<div class="log-loot colonize-locked">需要至少 1 艘殖民母艦(LV${HOMESTEAD_MOTHERSHIP_UNLOCK_LEVEL} 造船廠解鎖)才能殖民</div>`;
+      } else if (kp.target_type === 'empty') {
+        colonizeBtn = `<button class="upgrade" data-colonize-known="${kp.coord}" type="button">殖民</button>`;
+      }
+      // CG 精美圖 — 沿用總覽卡片同一批星球示意圖池(art/planets/1~6.jpg),用
+      // 座標當雜湊輸入(已知星球沒有自己的 planet_id,但座標本身就是穩定不變的
+      // 身分),同一顆星球每次重新整理都拿到同一張圖。見上方 CSS 註解與
+      // planetArtSrcFor() 的原始說明。
+      return `<div class="known-planet-card">
+        <img class="known-planet-bg" src="${planetArtSrcFor(kp.coord)}" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="known-planet-bg-overlay"></div>
+        <div class="known-planet-content">
+          <div class="log-text">座標 ${kp.coord} · ${typeLabel}</div>
+          <div class="log-loot">${intelLine}</div>
+          <div class="known-planet-actions">${reconGroup}${transportBtn}${invadeBtn}${tradeBtn}${colonizeBtn}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.querySelectorAll('button[data-recon]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const coord = parseInt(btn.dataset.recon, 10);
+        const input = container.querySelector(`.known-recon-scout-input[data-coord="${coord}"]`);
+        const scoutCount = Math.max(1, parseInt(input.value, 10) || 1);
+        onReconClick(coord, scoutCount, btn);
+      });
+    });
+    container.querySelectorAll('button[data-transport-to]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('transport-target-name').value = btn.dataset.transportTo;
+        const section = document.getElementById('transport-section');
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('transport-target-name').focus();
+      });
+    });
+    container.querySelectorAll('button[data-invade-to]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('target-name').value = btn.dataset.invadeTo;
+        const section = document.getElementById('attack-section');
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('target-name').focus();
+      });
+    });
+    container.querySelectorAll('button[data-colonize-known]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        onColonizeKnownClick(parseInt(btn.dataset.colonizeKnown, 10), btn);
+      });
+    });
+    container.querySelectorAll('button[data-trade]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const coord = parseInt(btn.dataset.trade, 10);
+        const npcPlanet = npcPlanetRows.find(np => np.coord === coord);
+        if (npcPlanet) openTradeModal(npcPlanet);
+      });
+    });
+  }
+
+  function onReconClick(coord, scoutCount, btn) {
+    openConfirmModal(
+      '確認偵查',
+      `派出 ${scoutCount} 艘偵察機前往座標 ${coord} 偵查最新情報,出發後仍可在航程過半前中途召回。`,
+      '派遣偵查',
+      () => launchRecon(coord, scoutCount, btn)
+    );
+  }
+
+  async function launchRecon(coord, scoutCount, btn) {
+    if (!planet) return;
+    // Same fleetCapDataReady guard as onExploreClick() just above — this
+    // function's own concurrent-mission-slot check right below reads the same
+    // `explorationRows` array, so it's exposed to the exact same post-switch
+    // race window. See that comment for the full explanation.
+    if (!fleetCapDataReady) { showToast('資料同步中,請稍候片刻再試', 'danger'); return; }
+    if (scoutCount > (planet.scout_count || 0)) {
+      showToast(`你只有 ${planet.scout_count || 0} 艘偵察機`, 'danger');
+      return;
+    }
+    const explorationCap = explorationCapForHomesteadLevel(homesteadLevel());
+    if (explorationRows.length >= explorationCap) {
+      showToast(`最多同時派遣 ${explorationCap} 支艦隊(含探索與偵查),請等其中一支返航`, 'danger');
+      return;
+    }
+    const travelSec = travelSeconds(planet.coord, coord);
+    const foodCost = missionFoodCost({ scout: scoutCount }, travelSec);
+    if (foodCost > localFood) {
+      showToast(`糧食不足,此次偵查需要 ${foodCost} 糧食(現有 ${Math.floor(localFood)})`, 'danger');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    const launchTime = new Date();
+    const arrivalTime = new Date(launchTime.getTime() + travelSec * 1000);
+
+    planet.scout_count = (planet.scout_count || 0) - scoutCount;
+    localFood -= foodCost;
+    renderResources();
+    flashResource('scout-count', 'danger');
+    await saveToServer();
+
+    try {
+      await restRequest('exploration_missions', {
+        method: 'POST',
+        body: JSON.stringify({
+          planet_id: planet.id,
+          player_name: planet.player_name,
+          mode: 'recon',
+          target_coord: coord,
+          scout_ships_sent: scoutCount,
+          duration_tier: 'recon',
+          launch_time: launchTime.toISOString(),
+          arrival_time: arrivalTime.toISOString(),
+          resolved: false,
+        }),
+      });
+      showToast(`偵察艦隊已出發前往座標 ${coord},預計 ${formatDuration(travelSec)} 後返航`, 'success');
+      await loadExplorationData();
+    } catch (err) {
+      console.error('Launch recon error:', err);
+      showToast('偵查派遣失敗:' + ((err && err.message) || String(err)), 'danger');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function onColonizeKnownClick(coord, btn) {
+    openColonizeModal(coord, null);
+  }
+
+  // ============================================================
+  // 殖民艦隊派遣 (Colonization missions) — per explicit user request,
+  // colonizing a discovered/known coordinate is no longer instant. It now
+  // travels like every other mission in this game (recon, transport,
+  // exploration), and the player explicitly chooses how many ships of each
+  // type and how much metal/crystal to commit, instead of the old flow which
+  // just created a same-instant, resource-empty new planet.
+  //
+  // Travel time now uses its OWN formula, colonizationTravelSeconds() (see
+  // the COLONIZATION_* constants near the top of the file) — deliberately
+  // NOT the shared travelSeconds() used by recon/transport/attack, per a
+  // later explicit user request to make colonization feel like a much
+  // bigger civilization-scale commitment (days, not minutes) without
+  // affecting the pace of ordinary fleet movement.
+  //
+  // Colonization also now REQUIRES committing at least one 殖民母艦
+  // (mothership, LV4 tech) — per explicit user request that colonizing be
+  // gated behind a genuine milestone investment rather than something any
+  // fleet can do casually. A discovered/known planet with no mothership
+  // available simply stays listed (known-planets / exploration log) with an
+  // explanatory message instead of a colonize button — see the two render
+  // sites below (renderExplorationLog / renderKnownPlanets) — so nothing is
+  // lost, colonizing it just waits until a mothership exists. The mothership
+  // is consumed entirely on arrival (does not return home, does not join
+  // the new colony's starting fleet) — see resolveOneColonization(), which
+  // deliberately does NOT reference mothership_ships_sent at all.
+  //
+  // Sending 0 of the OTHER ship types and 0 resources remains fully valid
+  // (matches the user's explicit note that a completely unequipped landing
+  // "也是一種玩法") — only the mothership has a hard minimum of 1.
+  //
+  // Whatever is committed does NOT return to the origin planet the way a
+  // transport mission's ships do — it's a one-way trip that becomes the new
+  // colony's STARTING fleet/resources (except the mothership itself, which
+  // is consumed rather than transferred — see above). While in flight, the
+  // committed ships are excluded from the origin planet's "home" count via a
+  // dedicated fleetColonizingCount() tally (see currentFleetTotal()), the
+  // same pattern already used for away/exploring/building — never actually
+  // decremented from planet.scout_count/etc, exactly like every other
+  // away-fleet state. Per explicit user request, the mothership counts
+  // toward the shared fleet total/cap identically to every other ship type
+  // while in flight (currentFleetTotal() is fully generic over
+  // Object.keys(SHIP_TYPES), so this needed no special-casing there).
+  // ============================================================
+
+  let pendingColonizeContext = null; // { coord, explorationId }
+
+  // Live preview, mirroring the 探索面板即時糧食預估 pattern — purely
+  // informational, doesn't gate anything on its own (the colonize-modal-ok
+  // handler's own `cargoLoaded > cargoCapacity` check is the actual
+  // authority). Reads the same four inputs the real launch check reads.
+  function updateColonizeCargoEstimate() {
+    const note = document.getElementById('colonize-cargo-note');
+    if (!note) return;
+    const transport = parseInt(document.getElementById('colonize-transport').value, 10) || 0;
+    const metal = Math.max(0, parseFloat(document.getElementById('colonize-metal').value) || 0);
+    const crystal = Math.max(0, parseFloat(document.getElementById('colonize-crystal').value) || 0);
+    const food = Math.max(0, parseFloat(document.getElementById('colonize-food').value) || 0);
+    const capacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const loaded = metal + crystal + food;
+    note.textContent = `運輸艦可攜帶上限:${fmt(capacity)}(目前攜帶合計 ${fmt(loaded)},金屬+晶體+糧食共用容量)`;
+    const over = loaded > capacity;
+    note.classList.toggle('insufficient', over);
+    if (over) note.textContent += ` · 超過上限,請增加運輸艦或減少攜帶量`;
+  }
+  ['colonize-transport', 'colonize-metal', 'colonize-crystal', 'colonize-food'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateColonizeCargoEstimate);
+  });
+
+  function openColonizeModal(coord, explorationId) {
+    pendingColonizeContext = { coord, explorationId: explorationId || null };
+    const travelSec = colonizationTravelSeconds(planet.coord, coord);
+    document.getElementById('colonize-modal-intro').textContent =
+      `確定要在座標 ${coord} 建立新的殖民地嗎?殖民是文明的重大決定,航程約需 ${formatDuration(travelSec)}。必須指派至少 1 艘殖民母艦隨行(抵達後將化為拓荒者營地,不會返航);下方也可選擇額外攜帶的艦隊與物資(含糧食)—— 這些會直接留在新殖民地作為起始資源,不會返航,可以全部留 0,輕裝出發。注意:攜帶的金屬/晶體/糧食合計不能超過運輸艦的載重量,糧食也完全由你攜帶的量決定,沒有內建緩衝——沒帶糧食,新殖民地起始糧食就是 0。`;
+    document.getElementById('colonize-mothership').value = 1;
+    ['colonize-scout', 'colonize-fighter', 'colonize-transport', 'colonize-metal', 'colonize-crystal', 'colonize-food'].forEach(id => {
+      document.getElementById(id).value = 0;
+    });
+    updateColonizeCargoEstimate();
+    const msg = document.getElementById('colonize-modal-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    document.getElementById('colonize-modal').classList.remove('hidden');
+  }
+
+  function closeColonizeModal() {
+    pendingColonizeContext = null;
+    document.getElementById('colonize-modal').classList.add('hidden');
+  }
+
+  // Used only when actually CONFIRMING a colonize launch — a fresh,
+  // authoritative account-wide colony-cap check, mirroring the same
+  // "cached flag for rendering, live fetch for the actual gate" split
+  // fetchDestinationFleetStatus() uses for 移防's destination fleet cap.
+  // The cached accountColonizationInFlightCountFlag/
+  // maxHomesteadLevelAccountWideFlag (used to decide whether the 殖民
+  // button even renders) only refresh once per poll cycle, so a player who
+  // launches two colonizations from two different planets within the same
+  // poll window could otherwise slip past the cap before either flag catches
+  // up. This re-derives both the cap and the current+pending planet count
+  // straight from the server at the moment of confirming.
+  async function fetchAccountColonyStatus() {
+    const ids = myPlanets.map(p => p.id).join(',');
+    const [homesteadRows, colonizationCountRows] = await Promise.all([
+      restRequest(`buildings?planet_id=in.(${ids})&building_type=eq.homestead&select=level`),
+      restRequest(`colonization_missions?player_name=eq.${encodeURIComponent(planet.player_name)}&resolved=eq.false&select=id`),
+    ]);
+    const levels = (homesteadRows || []).map(r => r.level || 1);
+    const maxLevel = levels.length > 0 ? Math.max(...levels) : 1;
+    const cap = colonyCapForHomesteadLevel(maxLevel);
+    const total = myPlanets.length + (colonizationCountRows || []).length;
+    return { total, cap };
+  }
+
+  document.getElementById('colonize-modal-cancel').addEventListener('click', closeColonizeModal);
+  document.getElementById('colonize-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'colonize-modal') closeColonizeModal();
+  });
+  document.getElementById('colonize-modal-ok').addEventListener('click', async () => {
+    if (!pendingColonizeContext) return;
+    const mothership = parseInt(document.getElementById('colonize-mothership').value, 10) || 0;
+    const scout = parseInt(document.getElementById('colonize-scout').value, 10) || 0;
+    const fighter = parseInt(document.getElementById('colonize-fighter').value, 10) || 0;
+    const transport = parseInt(document.getElementById('colonize-transport').value, 10) || 0;
+    const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-metal').value) || 0));
+    const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-crystal').value) || 0));
+    const food = Math.max(0, Math.floor(parseFloat(document.getElementById('colonize-food').value) || 0));
+    const msg = document.getElementById('colonize-modal-msg');
+    msg.className = 'attack-msg';
+
+    // BUG FIX (same vulnerability class as onExploreClick()/launchRecon()
+    // just above, and buildShips()'s original fleetCapDataReady guard): the
+    // double-launch guard for this exact coordinate lives entirely in
+    // renderExplorationLog()/renderKnownPlanets() — the 殖民 button simply
+    // doesn't render if `colonizationRows` already has an unresolved mission
+    // to this coord. But `colonizationRows` gets reset to `[]` synchronously
+    // on every switchToPlanet() and only repopulates once loadColonizationMissions()
+    // completes, so a player who reaches this modal and confirms fast enough
+    // right after switching planets could launch a SECOND colonization
+    // mission to a coordinate that already has one in flight, since the
+    // button's render-time check saw a stale empty array. Blocking here until
+    // fleetCapDataReady is true guarantees colonizationRows has been loaded at
+    // least once for this planet before any colonize launch can actually go
+    // through, closing that window.
+    if (!fleetCapDataReady) { msg.textContent = '資料同步中,請稍候片刻再試'; return; }
+
+    // FEATURE: 可殖民星球數量上限 — authoritative, live re-check right before
+    // actually launching (see fetchAccountColonyStatus()'s own comment for
+    // why this can't just trust the cached flags renderExplorationLog()/
+    // renderKnownPlanets() used to decide whether to even show this modal's
+    // 殖民 button in the first place).
+    const okBtnForCapCheck = document.getElementById('colonize-modal-ok');
+    okBtnForCapCheck.disabled = true;
+    let colonyStatus;
+    try {
+      colonyStatus = await fetchAccountColonyStatus();
+    } catch (err) {
+      console.error('Fetch account colony status error:', err);
+      msg.textContent = '無法確認殖民地數量上限,請稍後再試';
+      okBtnForCapCheck.disabled = false;
+      return;
+    }
+    okBtnForCapCheck.disabled = false;
+    if (colonyStatus.total >= colonyStatus.cap) {
+      msg.textContent = `已達到殖民地數量上限(目前 ${colonyStatus.total} / ${colonyStatus.cap} 顆,含在途中的殖民艦隊)——把任一顆星球的拓荒者營地升級可以擴增上限`;
+      return;
+    }
+
+    if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership < 1) { msg.textContent = '殖民必須指派至少 1 艘殖民母艦'; return; }
+    if (mothership > (planet.mothership_count || 0)) { msg.textContent = `你在家只有 ${planet.mothership_count || 0} 艘殖民母艦`; return; }
+    if (scout > (planet.scout_count || 0)) { msg.textContent = `你在家只有 ${planet.scout_count || 0} 艘偵察機`; return; }
+    if (fighter > (planet.fighter_count || 0)) { msg.textContent = `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機`; return; }
+    if (transport > (planet.transport_count || 0)) { msg.textContent = `你在家只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
+    // FEATURE: per explicit user request ("我認為殖民所能帶的資源,應該跟玩家選擇
+    // 的運輸艦數量掛勾,這才合理"), how much 金屬/晶體/糧食 can actually be
+    // committed is now capped by the committed 運輸艦 fleet's real cargo
+    // capacity — same `SHIP_TYPES.transport.cargoCapacity` (400/ship) and same
+    // "all cargo types share one pool" rule the existing 運輸(transport-with-
+    // consent) request flow already uses (see onTransportRequestClick()'s own
+    // `metalAmount + crystalAmount > capacity` check) — just extended here to
+    // cover 糧食 too, since that's now also real cargo being carried (not
+    // travel upkeep — see the SEPARATE colonizeFoodCost check just below).
+    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity;
+    const cargoLoaded = metal + crystal + food;
+    if (cargoLoaded > cargoCapacity) {
+      msg.textContent = `${transport} 艘運輸艦最多能載 ${fmt(cargoCapacity)}(金屬+晶體+糧食合計),目前共 ${fmt(cargoLoaded)},請增加運輸艦或減少攜帶量`;
+      return;
+    }
+    if (metal > localMetal) { msg.textContent = `金屬不足,目前只有 ${fmt(localMetal)}`; return; }
+    if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
+
+    const { coord, explorationId } = pendingColonizeContext;
+    // Two separate food draws on the ORIGIN planet: `colonizeFoodCost` is the
+    // travel upkeep for the committed fleet (consumed en route, same as every
+    // other mission type — see missionFoodCost()); `food` is the amount the
+    // player has chosen to hand over to become the new colony's starting
+    // stock (transferred, not consumed). Both come out of the same localFood
+    // balance at launch, so the check must cover their sum.
+    const colonizeFoodCost = missionFoodCost({ mothership, scout, fighter, transport }, colonizationTravelSeconds(planet.coord, coord));
+    const totalFoodNeeded = colonizeFoodCost + food;
+    if (totalFoodNeeded > localFood) {
+      msg.textContent = `糧食不足,此次殖民需要 ${colonizeFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(localFood)})`;
+      return;
+    }
+    const okBtn = document.getElementById('colonize-modal-ok');
+    okBtn.disabled = true;
+    try {
+      await launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal, food });
+      closeColonizeModal();
+    } catch (err) {
+      console.error('Launch colonization error:', err);
+      msg.textContent = '殖民艦隊派遣失敗:' + ((err && err.message) || String(err));
+    } finally {
+      okBtn.disabled = false;
+    }
+  });
+
+  async function launchColonization(coord, explorationId, { mothership, scout, fighter, transport, metal, crystal, food }) {
+    const travelSec = colonizationTravelSeconds(planet.coord, coord);
+    const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
+
+    // Optimistically deduct committed resources AND ships now, same pattern
+    // as every other mission type (launchExploration/launchRecon/attack/
+    // transport): planet.{type}_count only ever represents ships still
+    // physically at home, so committing ships to ANY mission decrements it
+    // immediately at launch — the "away"/"exploring"/"colonizing" tallies
+    // (fleetAwayCount()/fleetExploringCount()/fleetColonizingCount()) are
+    // what add the in-flight ships back on top of that reduced home count,
+    // in currentFleetTotal(), to reconstruct the true combined total.
+    //
+    // BUG FIX: this function used to deliberately leave ships un-deducted
+    // here ("tracked via mission row, not decremented"), which double-
+    // counted every committed ship — once still sitting in planet.
+    // {type}_count (never reduced), and again via fleetColonizingCount()
+    // (which also counts it as in-flight) — inflating currentFleetTotal()
+    // by exactly the committed fleet size, and in turn letting 自動生產
+    // keep queueing new batches using an artificially-lower cap headroom
+    // reading than the artificially-inflated total should have allowed.
+    // Reported by the user via a screenshot showing 總數 685 / 600, which
+    // traced back to exactly this: 685 = 600 (home, unchanged) + 85
+    // (committed ships double-counted through the colonizing bucket).
+    planet.mothership_count = (planet.mothership_count || 0) - mothership;
+    planet.scout_count = (planet.scout_count || 0) - scout;
+    planet.fighter_count = (planet.fighter_count || 0) - fighter;
+    planet.transport_count = (planet.transport_count || 0) - transport;
+    localMetal -= metal;
+    localCrystal -= crystal;
+    // Two separate food draws — see the colonize-modal-ok handler's comment
+    // for why these are kept distinct: the travel upkeep is consumed en
+    // route (same as every other mission type), while `food` is a transfer
+    // that becomes the new colony's starting stock (see resolveOneColonization()).
+    localFood -= missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+    localFood -= food;
+    renderResources();
+    if (metal > 0) flashResource('metal-value', 'danger');
+    if (crystal > 0) flashResource('crystal-value', 'danger');
+    if (food > 0) flashResource('food-value', 'danger');
+    await saveToServer();
+
+    await restRequest('colonization_missions', {
+      method: 'POST',
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        origin_planet_id: planet.id,
+        target_coord: coord,
+        mothership_ships_sent: mothership,
+        scout_ships_sent: scout,
+        fighter_ships_sent: fighter,
+        transport_ships_sent: transport,
+        metal_sent: metal,
+        crystal_sent: crystal,
+        food_sent: food,
+        launched_at: new Date().toISOString(),
+        arrival_time: arrivalTime,
+        resolved: false,
+        source_exploration_id: explorationId || null,
+      }),
+    });
+
+    showToast(`殖民艦隊已出發前往座標 ${coord},預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    await loadColonizationMissions();
+    renderFleetTopBar();
+    // Re-render both possible launch points immediately (not just on the
+    // next poll cycle) so the just-launched coordinate's colonize button
+    // switches to the in-flight status line right away — otherwise it would
+    // keep showing for up to one poll interval, inviting an accidental
+    // double-launch to the same coordinate.
+    renderExplorationLog();
+    renderKnownPlanets();
+  }
+
+  // ============================================================
+  // 商貿 (Commerce/Trade with a non-hostile NPC) — resolves INSTANTLY,
+  // unlike every fleet mission above. This is a deliberate simplification:
+  // trade is framed as a diplomatic gesture/gift exchange, not a fleet
+  // movement, so it doesn't need its own travel-time/mission-row plumbing.
+  // See "Known simplifications" in the project doc for this and the NPC's
+  // own stockpile being untouched by a trade (the metal/crystal returned is
+  // abstracted, not literally drawn down from the NPC's own `planets` row).
+  // ============================================================
+  let pendingTradeNpcPlanet = null;
+
+  function openTradeModal(npcPlanet) {
+    pendingTradeNpcPlanet = npcPlanet;
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    document.getElementById('trade-modal-intro').textContent =
+      `與「${npcPlanet.player_name}」(${archetype.name})商貿:贈送的糧食會換回約 ${Math.round(TRADE_RETURN_RATIO * 100)}% 價值的金屬與晶體(各半),並提升 ${TRADE_FRIENDLINESS_GAIN} 點友好度(上限 ${NPC_MAX_FRIENDLINESS})。`;
+    document.getElementById('trade-food-amount').value = Math.max(1, Math.min(100, Math.floor(localFood)));
+    const msg = document.getElementById('trade-modal-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    document.getElementById('trade-modal').classList.remove('hidden');
+  }
+  function closeTradeModal() {
+    pendingTradeNpcPlanet = null;
+    document.getElementById('trade-modal').classList.add('hidden');
+  }
+  document.getElementById('trade-modal-cancel').addEventListener('click', closeTradeModal);
+  document.getElementById('trade-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'trade-modal') closeTradeModal();
+  });
+  document.getElementById('trade-modal-ok').addEventListener('click', async () => {
+    if (!pendingTradeNpcPlanet) return;
+    const foodAmount = Math.max(1, Math.floor(parseFloat(document.getElementById('trade-food-amount').value) || 0));
+    const msg = document.getElementById('trade-modal-msg');
+    msg.className = 'attack-msg';
+    if (foodAmount > localFood) { msg.textContent = `糧食不足,目前只有 ${Math.floor(localFood)}`; return; }
+    const okBtn = document.getElementById('trade-modal-ok');
+    okBtn.disabled = true;
+    try {
+      await executeTrade(pendingTradeNpcPlanet, foodAmount);
+      closeTradeModal();
+    } catch (err) {
+      console.error('Trade error:', err);
+      msg.textContent = '商貿失敗:' + ((err && err.message) || String(err));
+    } finally {
+      okBtn.disabled = false;
+    }
+  });
+
+  async function executeTrade(npcPlanet, foodAmount) {
+    const archetype = NPC_ARCHETYPES[npcPlanet.npc_archetype] || NPC_ARCHETYPES.settler;
+    const repRows = await restRequest(
+      `npc_reputation?player_name=eq.${encodeURIComponent(planet.player_name)}&npc_planet_id=eq.${npcPlanet.id}&select=*`
+    );
+    const rep = repRows && repRows[0];
+    const currentFriendliness = rep ? rep.friendliness : archetype.initialFriendliness;
+    const newFriendliness = Math.min(NPC_MAX_FRIENDLINESS, currentFriendliness + TRADE_FRIENDLINESS_GAIN);
+    const returnedValue = Math.round(foodAmount * TRADE_RETURN_RATIO);
+    const metalBack = Math.round(returnedValue / 2);
+    const crystalBack = returnedValue - metalBack;
+
+    localFood -= foodAmount;
+    localMetal += metalBack;
+    localCrystal += crystalBack;
+    renderResources();
+    flashResource('food-value', 'danger');
+    flashResource('metal-value', 'success');
+    flashResource('crystal-value', 'success');
+    await saveToServer();
+
+    await restRequest(`npc_reputation?on_conflict=player_name,npc_planet_id`, {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        npc_planet_id: npcPlanet.id,
+        friendliness: newFriendliness,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    const repIdx = npcReputationRows.findIndex(r => String(r.npc_planet_id) === String(npcPlanet.id));
+    if (repIdx >= 0) npcReputationRows[repIdx].friendliness = newFriendliness;
+    else npcReputationRows.push({ player_name: planet.player_name, npc_planet_id: npcPlanet.id, friendliness: newFriendliness });
+
+    showToast(`與「${npcPlanet.player_name}」商貿成功:送出 ${foodAmount} 糧食,換回 ${metalBack} 金屬 · ${crystalBack} 晶體,友好度 +${TRADE_FRIENDLINESS_GAIN}(現為 ${newFriendliness})`, 'success', 8000);
+    renderKnownPlanets();
+  }
+
+  async function loadColonizationMissions() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(`colonization_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&order=launched_at.asc`);
+      colonizationRows = rows || [];
+      renderMovementLog();
+    } catch (err) {
+      console.error('Load colonization missions error:', err);
+    }
+  }
+
+  function fleetColonizingCount(shipType) {
+    const field = `${shipType}_ships_sent`;
+    return colonizationRows.reduce((sum, r) => sum + (r[field] || 0), 0);
+  }
+
+  // 中途召回一支已出發的殖民艦隊 — see computeRecallPlan()'s comment for the
+  // mirrored-travel-time model. Unlike exploration/recon, colonization has no
+  // separate mid-journey attrition mechanic to prorate (see "Colonization
+  // missions do not roll mission attrition" in the project notes) — the
+  // committed fleet/resources just come home in full, no new colony created.
+  async function recallColonizationMission(mission) {
+    const shipCounts = {
+      mothership: mission.mothership_ships_sent || 0,
+      scout: mission.scout_ships_sent || 0,
+      fighter: mission.fighter_ships_sent || 0,
+      transport: mission.transport_ships_sent || 0,
+    };
+    const result = await applyRecall('colonization_missions', mission, shipCounts);
+    if (!result) {
+      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
+      return;
+    }
+    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
+    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
+    showToast(`殖民艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
+    await loadColonizationMissions();
+  }
+
+  // A recalled colonization's counterpart to resolveOneColonization()'s
+  // normal "create the new planet" path — the committed mothership/ships/
+  // resources return to the ORIGIN planet instead (the mothership was only
+  // ever consumed on an actual arrival, so a recalled one simply comes back
+  // like any other ship type here). Deliberately does NOT mark a
+  // `source_exploration_id` row `claimed` — the colonization never
+  // completed, so that log entry's "殖民這顆星球" button should be free to
+  // reappear (renderExplorationLog()'s pendingColonize lookup already stops
+  // finding this mission once colonizationRows excludes resolved rows).
+  // Shared refund path for a colonization mission that will NOT be founding
+  // a new colony after all — used both by an explicit mid-flight recall
+  // (resolveRecalledColonization()) and by the arrived-but-target-already-
+  // occupied BUG FIX below (resolveOneColonization()'s occupied-coord check).
+  // Both cases are the same situation from the origin planet's point of
+  // view: the whole committed fleet + metal/crystal/food never actually
+  // founded anything and simply comes home in full — only the toast wording
+  // differs (why it's coming back).
+  async function refundColonizationFleetToOrigin(mission, toastMessage) {
+    const rows = await restRequest(`planets?id=eq.${mission.origin_planet_id}&select=*`);
+    const originPlanet = rows && rows[0];
+    if (!originPlanet) return;
+    const res = await currentResourcesOfPlanet(originPlanet);
+    const newMetal = res.metal + (mission.metal_sent || 0);
+    const newCrystal = res.crystal + (mission.crystal_sent || 0);
+    // The 攜帶糧食 committed to the new colony (food_sent) never left with
+    // the fleet's own travel-upkeep pre-payment — that's a separate deduction
+    // (see launchColonization()'s applyRecall()-independent
+    // missionFoodCost() draw) already refunded proportionally by
+    // applyRecall() itself when a recall was first requested (a no-op cost
+    // for the occupied-coord case below, which was never recalled). This
+    // food_sent amount was earmarked as the NEW colony's starting stock,
+    // which never came to be since no colony was actually founded — so it
+    // comes back to the origin in full here, same as metal_sent/crystal_sent.
+    const newFood = res.food + (mission.food_sent || 0);
+    const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
+    const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
+    const newFighter = originPlanet.fighter_count + (mission.fighter_ships_sent || 0);
+    const newTransport = (originPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
+    await restRequest(`planets?id=eq.${originPlanet.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metal: newMetal,
+        crystal: newCrystal,
+        food: newFood,
+        mothership_count: newMothership,
+        scout_count: newScout,
+        fighter_count: newFighter,
+        transport_count: newTransport,
+        last_tick: new Date().toISOString(),
+      }),
+    });
+    if (planet && String(planet.id) === String(originPlanet.id)) {
+      localMetal = newMetal;
+      localCrystal = newCrystal;
+      localFood = newFood;
+      planet.mothership_count = newMothership;
+      planet.scout_count = newScout;
+      planet.fighter_count = newFighter;
+      planet.transport_count = newTransport;
+      lastTickLocal = Date.now();
+      renderResources();
+      if (toastMessage) showToast(toastMessage, 'success', 8000);
+    }
+  }
+  async function resolveRecalledColonization(mission) {
+    await refundColonizationFleetToOrigin(
+      mission,
+      `殖民艦隊已召回返航,艦隊與物資已回到星球(座標 ${mission.target_coord} 未被殖民)`
+    );
+  }
+
+  async function resolveArrivedColonizations() {
+    if (!planet) return;
+    try {
+      const nowIso = new Date().toISOString();
+      const rows = await restRequest(
+        `colonization_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&arrival_time=lte.${encodeURIComponent(nowIso)}`
+      );
+      if (!rows || rows.length === 0) return;
+      for (const mission of rows) await resolveOneColonization(mission);
+    } catch (err) {
+      console.error('Resolve colonizations error:', err);
+    }
+  }
+
+  async function resolveOneColonization(mission) {
+    // Same claim-race-safe CAS pattern as resolveOneExploration(): only the
+    // caller whose PATCH actually flips resolved false->true (and gets a
+    // non-empty result back) proceeds to create the new planet — guards
+    // against two open tabs/devices both trying to resolve the same arrival.
+    //
+    // NOTE: the new `planets` row deliberately does NOT include a
+    // mothership_count field derived from mission.mothership_ships_sent —
+    // per explicit user request, the committed mothership is consumed
+    // entirely on a successful arrival (it neither returns to the origin
+    // planet nor becomes part of the new colony's starting fleet), so it
+    // simply isn't carried forward here at all.
+    const claimed = await restRequest(`colonization_missions?id=eq.${mission.id}&resolved=eq.false`, {
+      method: 'PATCH',
+      body: JSON.stringify({ resolved: true }),
+    });
+    if (!claimed || claimed.length === 0) return;
+
+    if (mission.recalled) {
+      await resolveRecalledColonization(mission);
+      return;
+    }
+
+    // BUG FIX: this function used to unconditionally create a new `planets`
+    // row at mission.target_coord on arrival, with NO check for whether that
+    // coordinate had since been colonized by someone else — a player who
+    // never re-偵查'd a stale "無人殖民地" known-planets entry (or who simply
+    // lost a race to another colonizer targeting the same coord) would end
+    // up with the game silently creating a SECOND planets row stacked at the
+    // same coordinate, which nothing else in this file expects (every
+    // coord-keyed lookup elsewhere — attack targeting, known_planets
+    // upserts, etc. — assumes at most one planet per coord). Found while
+    // discussing with the user whether 偵查-ing an already-known "empty"
+    // coordinate before colonizing is actually necessary; confirmed via
+    // code review that resolveOneColonization() never re-checked occupancy
+    // at all, at either launch or arrival. Fixed by checking live, right at
+    // arrival (the CAS claim above already guarantees only one caller
+    // reaches this point for this mission), whether a planet now exists at
+    // the target coord — if so, the colonization fails and the whole
+    // committed fleet + resources return home via the exact same refund
+    // path as an explicit recall (refundColonizationFleetToOrigin()) rather
+    // than vanishing or creating a duplicate. The player's known_planets
+    // entry for that coord is also refreshed to the real occupant (type +
+    // name) so it stops showing the stale "無人殖民地" status that led to
+    // the wasted trip — deliberately left last_scouted_at at null rather
+    // than backfilling full recon-level intel (turret power, fleet counts,
+    // etc.), since bumping into an occupant on a failed colonization run
+    // isn't the same as actually running a proper 偵查 on them.
+    const occupantRows = await restRequest(`planets?coord=eq.${mission.target_coord}&select=*&order=id.asc&limit=1`);
+    const occupant = occupantRows && occupantRows[0];
+    if (occupant) {
+      await refundColonizationFleetToOrigin(
+        mission,
+        `座標 ${mission.target_coord} 已被搶先殖民,殖民艦隊撲空返航,艦隊與物資已回到原本星球`
+      );
+      try {
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: mission.target_coord,
+            target_type: occupant.is_npc ? 'npc' : 'player',
+            target_player_name: occupant.player_name,
+            last_scouted_at: null,
+          }),
+        });
+        await loadKnownPlanets();
+      } catch (err) {
+        // Best-effort refresh only — the fleet/resource refund above already
+        // completed and is what actually matters; a failure here just means
+        // the known-planets entry stays stale until the next recon.
+        console.error('Refresh known_planets after failed colonization error:', err);
+      }
+      return;
+    }
+
+    const created = await restRequest('planets', {
+      method: 'POST',
+      body: JSON.stringify({
+        player_name: mission.player_name,
+        coord: mission.target_coord,
+        metal: mission.metal_sent || 0,
+        crystal: mission.crystal_sent || 0,
+        scout_count: mission.scout_ships_sent || 0,
+        fighter_count: mission.fighter_ships_sent || 0,
+        transport_count: mission.transport_ships_sent || 0,
+        // FEATURE: new colonies used to always start with a fixed
+        // STARTING_FOOD seed regardless of the committed fleet size — the
+        // user pointed out that a large committed fleet (which becomes the
+        // new colony's HOME fleet the instant it lands, and so immediately
+        // starts eating food upkeep — see resolveFoodUpkeep()) could easily
+        // outpace that fixed 100-point buffer, risking an immediate
+        // starvation event right after founding. `攜帶糧食` is now a real
+        // colonize-modal input, same row as 攜帶金屬/攜帶晶體, and per
+        // explicit user choice ("完全由你携帶的量決定,與金屬/晶體一致") the
+        // new colony's starting food is driven ENTIRELY by what was
+        // committed — bringing 0 means the new colony starts with 0 food,
+        // exactly like bringing 0 metal/crystal means starting with 0 of
+        // those, no residual STARTING_FOOD safety net. STARTING_FOOD is
+        // still used unchanged for a brand-new PLAYER's very first planet
+        // (see the `players` table insert) — this only changes newly-founded
+        // colonies via colonization.
+        food: mission.food_sent || 0,
+        // Explicit, not relied on as a DB default: every other place in this
+        // file that sets metal/crystal to an absolute value also stamps
+        // last_tick alongside it (see saveToServer() and the mission-loot
+        // resolution sites), so catchUpOfflineResources()/tick() compute
+        // elapsed production from the moment these starting resources were
+        // actually granted, not from whatever (possibly null/very old)
+        // timestamp the row would otherwise be left with.
+        last_tick: new Date().toISOString(),
+      }),
+    });
+    const newPlanet = created && created[0];
+    if (newPlanet) await seedHomestead(newPlanet.id);
+
+    if (mission.source_exploration_id) {
+      await restRequest(`exploration_missions?id=eq.${mission.source_exploration_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ claimed: true }),
+      });
+    }
+    // Always also attempt to clear a matching known_planets row — a harmless
+    // no-op if this coordinate was never in the registry (e.g. launched
+    // straight from an exploration log entry rather than the known list).
+    await restRequest(
+      `known_planets?owner_player_name=eq.${encodeURIComponent(mission.player_name)}&coord=eq.${mission.target_coord}`,
+      { method: 'DELETE' }
+    );
+
+    if (newPlanet) {
+      myPlanets = [...myPlanets, newPlanet];
+      renderPlanetSwitcher();
+      showToast(`殖民成功!新星球位於座標 ${mission.target_coord}`, 'success', 8000);
+    }
+  }
+
+  // ============================================================
+  // 移防 (redeploy fleets between the player's OWN colonies) — per explicit
+  // user request ("讓玩家可以隨時派遣艦隊去別的殖民星駐防,當然要卡控上限"). Unlike
+  // 運輸 (transport-with-consent, which targets ANOTHER player and needs their
+  // approval), 移防 targets one of the player's own OTHER colonies and needs
+  // no consent — both ends belong to the same account. It carries all four
+  // ship types (including 殖民母艦, per explicit user choice "四種都可以(含殖民
+  // 母艦)") plus 金屬/晶體/糧食 cargo in the SAME action ("艦隊+資源一起帶"), reusing
+  // the exact transport-capacity-cargo mechanic just built for colonization
+  // (see updateColonizeCargoEstimate()'s twin below). Uses ordinary
+  // travelSeconds() (the minutes-scale formula shared with attack/transport/
+  // exploration), NOT colonizationTravelSeconds() (the separate days-scale
+  // formula) — redeploying between two colonies that already exist is an
+  // ordinary fleet movement, not a civilization-founding voyage. Mid-flight
+  // recall is supported ("支援(建議)") by reusing applyRecall()/
+  // computeRecallPlan() completely unchanged — both are already fully
+  // generic over the mission table name.
+  // ============================================================
+
+  async function loadRedeployMissions() {
+    if (!planet) return;
+    try {
+      const rows = await restRequest(`redeploy_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&order=launched_at.asc`);
+      redeployRows = rows || [];
+      renderMovementLog();
+    } catch (err) {
+      console.error('Load redeploy missions error:', err);
+    }
+  }
+
+  function fleetRedeployingCount(shipType) {
+    const field = `${shipType}_ships_sent`;
+    return redeployRows.reduce((sum, r) => sum + (r[field] || 0), 0);
+  }
+
+  // Used only when LAUNCHING a 移防 mission: fetches a fresh, full
+  // accounting of an ARBITRARY (not necessarily currently-viewed) planet's
+  // fleet total + cap, so the DESTINATION's own fleet-cap can be checked at
+  // launch time even though currentFleetTotal()/homesteadLevel() above only
+  // ever read the CURRENTLY VIEWED planet's cached state. Mirrors the exact
+  // same per-type accounting currentFleetTotal() does (home + away +
+  // exploring + building + colonizing), plus two 移防-specific additions:
+  // ships already in flight AWAY FROM the destination (an outgoing 移防 of
+  // its own) still count against it, same "committed ships count against
+  // whichever planet they left, until they actually land somewhere else"
+  // rule every other in-flight mission type already follows — and ships
+  // already in flight TOWARD the destination (another pending, not-yet-
+  // arrived 移防) are also reserved against its cap up front, so two
+  // overlapping 移防 launches to the same destination can't both slip past a
+  // cap check that only looked at the destination's current, not-yet-
+  // credited state.
+  async function fetchDestinationFleetStatus(destPlanetId) {
+    const [planetRows, homesteadRows, awayRows, exploringRows, buildingRows, colonizingRows, redeployOutRows, redeployInRows] = await Promise.all([
+      restRequest(`planets?id=eq.${destPlanetId}&select=*`),
+      restRequest(`buildings?planet_id=eq.${destPlanetId}&building_type=eq.homestead&select=level`),
+      restRequest(`fleet_missions?attacker_planet_id=eq.${destPlanetId}&resolved=eq.false`),
+      restRequest(`exploration_missions?planet_id=eq.${destPlanetId}&resolved=eq.false`),
+      restRequest(`ship_queue?planet_id=eq.${destPlanetId}&status=neq.done`),
+      restRequest(`colonization_missions?origin_planet_id=eq.${destPlanetId}&resolved=eq.false`),
+      restRequest(`redeploy_missions?origin_planet_id=eq.${destPlanetId}&resolved=eq.false`),
+      restRequest(`redeploy_missions?destination_planet_id=eq.${destPlanetId}&resolved=eq.false`),
+    ]);
+    const destPlanet = planetRows && planetRows[0];
+    if (!destPlanet) return null;
+    const homestead = homesteadRows && homesteadRows[0];
+    const level = homestead ? homestead.level : 1;
+    const cap = fleetCapForHomesteadLevel(level);
+    const sumField = (rows, field) => (rows || []).reduce((sum, r) => sum + (r[field] || 0), 0);
+    let total = 0;
+    for (const type of Object.keys(SHIP_TYPES)) {
+      const home = destPlanet[`${type}_count`] || 0;
+      let away = 0;
+      if (type === 'fighter') {
+        away = (awayRows || []).filter(m => (m.mission_type || 'attack') !== 'transport').reduce((s, m) => s + (m.fighter_ships_sent || m.ships_sent || 0), 0);
+      } else if (type === 'transport') {
+        away = (awayRows || []).filter(m => m.mission_type === 'transport').reduce((s, m) => s + (m.transport_ships_sent || 0), 0);
+      }
+      const exploring = sumField(exploringRows, `${type}_ships_sent`);
+      const building = (buildingRows || []).filter(r => (r.ship_type || 'fighter') === type).reduce((s, r) => s + r.count, 0);
+      const colonizing = sumField(colonizingRows, `${type}_ships_sent`);
+      const redeployingOut = sumField(redeployOutRows, `${type}_ships_sent`);
+      const redeployingIn = sumField(redeployInRows, `${type}_ships_sent`);
+      total += home + away + exploring + building + colonizing + redeployingOut + redeployingIn;
+    }
+    return { total, cap, planet: destPlanet };
+  }
+
+  // Live preview of how much 金屬/晶體/糧食 the currently-entered 運輸艦 count can
+  // actually carry — identical mechanic to updateColonizeCargoEstimate()
+  // above, just wired to the #redeploy-* fields instead of the modal's.
+  function updateRedeployCargoEstimate() {
+    const note = document.getElementById('redeploy-cargo-note');
+    if (!note) return;
+    const transport = parseInt(document.getElementById('redeploy-transport').value, 10) || 0;
+    const metal = Math.max(0, parseFloat(document.getElementById('redeploy-metal').value) || 0);
+    const crystal = Math.max(0, parseFloat(document.getElementById('redeploy-crystal').value) || 0);
+    const food = Math.max(0, parseFloat(document.getElementById('redeploy-food').value) || 0);
+    // Demeter's double_cargo effect doubles the displayed/enforced cap too —
+    // keep this preview honest about what onRedeployLaunchClick() will
+    // actually allow.
+    const weaponKey = document.getElementById('redeploy-weapon-select')?.value || null;
+    const demeterDoublesCargo = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'double_cargo');
+    const capacity = transport * SHIP_TYPES.transport.cargoCapacity * (demeterDoublesCargo ? 2 : 1);
+    const loaded = metal + crystal + food;
+    note.textContent = `運輸艦可攜帶上限:${fmt(capacity)}(目前攜帶合計 ${fmt(loaded)},金屬+晶體+糧食共用容量)`;
+    const over = loaded > capacity;
+    note.classList.toggle('insufficient', over);
+    if (over) note.textContent += ` · 超過上限,請增加運輸艦或減少攜帶量`;
+  }
+  ['redeploy-transport', 'redeploy-metal', 'redeploy-crystal', 'redeploy-food'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateRedeployCargoEstimate);
+  });
+  document.getElementById('redeploy-weapon-select')?.addEventListener('change', updateRedeployCargoEstimate);
+  updateRedeployCargoEstimate();
+
+  document.getElementById('redeploy-launch-btn').addEventListener('click', onRedeployLaunchClick);
+  document.getElementById('redeploy-weapon-select')?.addEventListener('change', () => updateWeaponPreview('redeploy-weapon-select', 'redeploy-weapon-preview', 'redeploy'));
+
+  function onRedeployLaunchClick() {
+    const destId = document.getElementById('redeploy-target-planet').value;
+    const mothership = parseInt(document.getElementById('redeploy-mothership').value, 10) || 0;
+    const scout = parseInt(document.getElementById('redeploy-scout').value, 10) || 0;
+    const fighter = parseInt(document.getElementById('redeploy-fighter').value, 10) || 0;
+    const transport = parseInt(document.getElementById('redeploy-transport').value, 10) || 0;
+    const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('redeploy-metal').value) || 0));
+    const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('redeploy-crystal').value) || 0));
+    const food = Math.max(0, Math.floor(parseFloat(document.getElementById('redeploy-food').value) || 0));
+    const msg = document.getElementById('redeploy-msg');
+    msg.className = 'attack-msg';
+
+    if (!destId) { msg.textContent = '請先選擇要移防的目的地殖民地'; return; }
+    const destPlanet = myPlanets.find(p => String(p.id) === String(destId));
+    if (!destPlanet) { msg.textContent = '找不到這顆殖民地'; return; }
+    if (mothership < 0 || scout < 0 || fighter < 0 || transport < 0) { msg.textContent = '艦隊數量不能為負數'; return; }
+    if (mothership + scout + fighter + transport <= 0) { msg.textContent = '請至少指派 1 艘艦艇'; return; }
+    if (mothership > (planet.mothership_count || 0)) { msg.textContent = `你在家只有 ${planet.mothership_count || 0} 艘殖民母艦`; return; }
+    if (scout > (planet.scout_count || 0)) { msg.textContent = `你在家只有 ${planet.scout_count || 0} 艘偵察機`; return; }
+    if (fighter > (planet.fighter_count || 0)) { msg.textContent = `你在家只有 ${planet.fighter_count || 0} 艘戰鬥機`; return; }
+    if (transport > (planet.transport_count || 0)) { msg.textContent = `你在家只有 ${planet.transport_count || 0} 艘運輸艦`; return; }
+    // 帶兵器 — Demeter's double_cargo effect doubles the cargo cap check
+    // right here (the actual cap enforcement lives client-side, in this
+    // validation, not in resolveOneRedeploy()).
+    const weaponKey = document.getElementById('redeploy-weapon-select')?.value || null;
+    const demeterDoublesCargo = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'double_cargo');
+    const cargoCapacity = transport * SHIP_TYPES.transport.cargoCapacity * (demeterDoublesCargo ? 2 : 1);
+    const cargoLoaded = metal + crystal + food;
+    if (cargoLoaded > cargoCapacity) {
+      msg.textContent = `${transport} 艘運輸艦最多能載 ${fmt(cargoCapacity)}(金屬+晶體+糧食合計),目前共 ${fmt(cargoLoaded)},請增加運輸艦或減少攜帶量`;
+      return;
+    }
+    if (metal > localMetal) { msg.textContent = `金屬不足,目前只有 ${fmt(localMetal)}`; return; }
+    if (crystal > localCrystal) { msg.textContent = `晶體不足,目前只有 ${fmt(localCrystal)}`; return; }
+
+    // Hermes' fast_travel effect must take effect at LAUNCH time — the
+    // duration is fixed the moment this mission row is created, not at
+    // resolve. Same "must happen at launch" caveat as Artemis' half_duration
+    // for exploration.
+    let travelSec = travelSeconds(planet.coord, destPlanet.coord);
+    const hermesSpeedsTravel = !!(weaponKey && weaponEffectAppliesTo(weaponKey, 'redeploy') && ANCIENT_WEAPONS[weaponKey].effect === 'fast_travel');
+    if (hermesSpeedsTravel) travelSec = Math.max(30, Math.round(travelSec / 5));
+    const shipCounts = { mothership, scout, fighter, transport };
+    const travelFoodCost = missionFoodCost(shipCounts, travelSec);
+    const totalFoodNeeded = travelFoodCost + food;
+    if (totalFoodNeeded > localFood) {
+      msg.textContent = `糧食不足,此次移防需要 ${travelFoodCost} 糧食(航程消耗)${food > 0 ? ` + ${food} 糧食(攜帶)` : ''} = ${totalFoodNeeded}(現有 ${Math.floor(localFood)})`;
+      return;
+    }
+
+    const weaponNote = weaponKey && ANCIENT_WEAPONS[weaponKey] ? `,攜帶古代兵器「${ANCIENT_WEAPONS[weaponKey].name}」` : '';
+    openConfirmModal(
+      '確認移防',
+      `派遣艦隊前往座標 ${destPlanet.coord} 駐防${weaponNote},預計航程 ${formatDuration(travelSec)}。出發前會再次確認目的地的艦隊上限是否還有空間。`,
+      '派遣移防',
+      () => launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec, weaponKey })
+    );
+  }
+
+  async function launchRedeploy(destPlanet, { mothership, scout, fighter, transport, metal, crystal, food, travelSec, weaponKey }) {
+    const msg = document.getElementById('redeploy-msg');
+    msg.className = 'attack-msg';
+    const totalToSend = mothership + scout + fighter + transport;
+
+    // 卡控上限 (per explicit user request): re-check the DESTINATION's own
+    // fleet cap immediately before committing, fetched fresh (not from any
+    // cached state — the destination usually isn't even the currently-viewed
+    // planet). Not a perfectly atomic compare-and-swap (see this file's own
+    // documented history of check-then-insert races elsewhere) — but this is
+    // the same "validate against a fresh read immediately before launch"
+    // standard every other fleet-cap check in this codebase already holds
+    // itself to, and a launch that loses a narrow race here simply gets
+    // rejected at the next equivalent check (arrival doesn't re-check, so a
+    // genuinely-lost race would over-fill the destination — accepted as a
+    // rare edge case, same tradeoff as every other non-atomic check here).
+    let status;
+    try {
+      status = await fetchDestinationFleetStatus(destPlanet.id);
+    } catch (err) {
+      console.error('Fetch destination fleet status error:', err);
+      msg.textContent = '無法確認目的地艦隊狀態,請稍後再試';
+      return;
+    }
+    if (!status) { msg.textContent = '找不到目的地殖民地資料'; return; }
+    if (status.total + totalToSend > status.cap) {
+      msg.textContent = `目的地艦隊已接近上限(${fmt(status.total)}/${fmt(status.cap)}),加派 ${fmt(totalToSend)} 艘會超過上限,請減少派遣數量`;
+      return;
+    }
+
+    // Same optimistic-deduct-then-POST pattern as launchColonization(): ships
+    // committed to ANY mission decrement planet.{type}_count immediately at
+    // launch, and fleetRedeployingCount() (via currentFleetTotal()) adds the
+    // in-flight ships back on top while this mission is unresolved.
+    planet.mothership_count = (planet.mothership_count || 0) - mothership;
+    planet.scout_count = (planet.scout_count || 0) - scout;
+    planet.fighter_count = (planet.fighter_count || 0) - fighter;
+    planet.transport_count = (planet.transport_count || 0) - transport;
+    localMetal -= metal;
+    localCrystal -= crystal;
+    localFood -= missionFoodCost({ mothership, scout, fighter, transport }, travelSec);
+    localFood -= food;
+    renderResources();
+    if (metal > 0) flashResource('metal-value', 'danger');
+    if (crystal > 0) flashResource('crystal-value', 'danger');
+    if (food > 0) flashResource('food-value', 'danger');
+    await saveToServer();
+
+    const arrivalTime = new Date(Date.now() + travelSec * 1000).toISOString();
+    await restRequest('redeploy_missions', {
+      method: 'POST',
+      body: JSON.stringify({
+        player_name: planet.player_name,
+        origin_planet_id: planet.id,
+        destination_planet_id: destPlanet.id,
+        destination_coord: destPlanet.coord,
+        mothership_ships_sent: mothership,
+        scout_ships_sent: scout,
+        fighter_ships_sent: fighter,
+        transport_ships_sent: transport,
+        metal_sent: metal,
+        crystal_sent: crystal,
+        food_sent: food,
+        launched_at: new Date().toISOString(),
+        arrival_time: arrivalTime,
+        resolved: false,
+        weapon_key: weaponKey || null,
+      }),
+    });
+    // Book the selected weapon onto this mission — conditional on
+    // status=eq.home to avoid double-booking, same pattern as
+    // launchExploration()/executeAttack().
+    if (weaponKey) {
+      await restRequest(
+        `ancient_weapons?player_name=eq.${encodeURIComponent(planet.player_name)}&weapon_key=eq.${encodeURIComponent(weaponKey)}&status=eq.home`,
+        { method: 'PATCH', body: JSON.stringify({ status: 'on_mission' }) }
+      );
+      const w = ancientWeaponRows.find(r => r.weapon_key === weaponKey);
+      if (w) w.status = 'on_mission';
+      renderAncientWeapons();
+      populateWeaponSelects();
+    }
+
+    showToast(`艦隊已出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    ['redeploy-mothership', 'redeploy-scout', 'redeploy-fighter', 'redeploy-transport', 'redeploy-metal', 'redeploy-crystal', 'redeploy-food'].forEach(id => {
+      document.getElementById(id).value = '0';
+    });
+    updateRedeployCargoEstimate();
+    msg.textContent = '';
+    renderFleetTopBar();
+    await loadRedeployMissions();
+  }
+
+  async function resolveArrivedRedeployments() {
+    if (!planet) return;
+    try {
+      const nowIso = new Date().toISOString();
+      const rows = await restRequest(
+        `redeploy_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&arrival_time=lte.${encodeURIComponent(nowIso)}`
+      );
+      if (!rows || rows.length === 0) return;
+      for (const mission of rows) await resolveOneRedeploy(mission);
+    } catch (err) {
+      console.error('Resolve redeploy error:', err);
+    }
+  }
+
+  // Counterpart to resolveOneColonization() — instead of creating a brand
+  // new planet, credits the committed fleet/resources onto the DESTINATION's
+  // EXISTING planets row (which is not necessarily the currently-viewed
+  // planet — this only ever runs while viewing the ORIGIN, since that's what
+  // resolveArrivedRedeployments() is scoped to).
+  async function resolveOneRedeploy(mission) {
+    const claimed = await restRequest(`redeploy_missions?id=eq.${mission.id}&resolved=eq.false`, {
+      method: 'PATCH',
+      body: JSON.stringify({ resolved: true }),
+    });
+    if (!claimed || claimed.length === 0) return;
+
+    // Weapons are never destroyed and always return home regardless of the
+    // mission's outcome — including a recalled 移防 — so this PATCH runs
+    // unconditionally right after the claim succeeds, before branching on
+    // mission.recalled below.
+    if (mission.weapon_key) {
+      try {
+        await restRequest(
+          `ancient_weapons?player_name=eq.${encodeURIComponent(mission.player_name)}&weapon_key=eq.${encodeURIComponent(mission.weapon_key)}&status=eq.on_mission`,
+          { method: 'PATCH', body: JSON.stringify({ status: 'home' }) }
+        );
+        const w = ancientWeaponRows.find(r => r.weapon_key === mission.weapon_key);
+        if (w) w.status = 'home';
+        renderAncientWeapons();
+        populateWeaponSelects();
+      } catch (err) {
+        console.error('Return ancient weapon (redeploy) error:', err);
+      }
+    }
+
+    if (mission.recalled) {
+      await resolveRecalledRedeploy(mission);
+      return;
+    }
+
+    const rows = await restRequest(`planets?id=eq.${mission.destination_planet_id}&select=*`);
+    const destPlanet = rows && rows[0];
+    if (!destPlanet) return;
+    const res = await currentResourcesOfPlanet(destPlanet);
+    const newMetal = res.metal + (mission.metal_sent || 0);
+    const newCrystal = res.crystal + (mission.crystal_sent || 0);
+    const newFood = res.food + (mission.food_sent || 0);
+    const newMothership = (destPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
+    const newScout = (destPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
+    const newFighter = (destPlanet.fighter_count || 0) + (mission.fighter_ships_sent || 0);
+    const newTransport = (destPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
+    const patchedFields = {
+      metal: newMetal,
+      crystal: newCrystal,
+      food: newFood,
+      mothership_count: newMothership,
+      scout_count: newScout,
+      fighter_count: newFighter,
+      transport_count: newTransport,
+      last_tick: new Date().toISOString(),
+    };
+    await restRequest(`planets?id=eq.${destPlanet.id}`, { method: 'PATCH', body: JSON.stringify(patchedFields) });
+
+    const idx = myPlanets.findIndex(p => String(p.id) === String(destPlanet.id));
+    if (idx >= 0) myPlanets[idx] = { ...destPlanet, ...patchedFields };
+
+    if (planet && String(planet.id) === String(destPlanet.id)) {
+      localMetal = newMetal;
+      localCrystal = newCrystal;
+      localFood = newFood;
+      planet.mothership_count = newMothership;
+      planet.scout_count = newScout;
+      planet.fighter_count = newFighter;
+      planet.transport_count = newTransport;
+      lastTickLocal = Date.now();
+      renderResources();
+    }
+    showToast(`移防艦隊已抵達座標 ${mission.destination_coord},艦隊與物資已進駐該殖民地`, 'success', 8000);
+  }
+
+  // A recalled 移防's counterpart to resolveRecalledColonization() — the
+  // committed fleet/resources return to the ORIGIN planet instead of ever
+  // reaching the destination.
+  async function resolveRecalledRedeploy(mission) {
+    const rows = await restRequest(`planets?id=eq.${mission.origin_planet_id}&select=*`);
+    const originPlanet = rows && rows[0];
+    if (!originPlanet) return;
+    const res = await currentResourcesOfPlanet(originPlanet);
+    const newMetal = res.metal + (mission.metal_sent || 0);
+    const newCrystal = res.crystal + (mission.crystal_sent || 0);
+    const newFood = res.food + (mission.food_sent || 0);
+    const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
+    const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
+    const newFighter = originPlanet.fighter_count + (mission.fighter_ships_sent || 0);
+    const newTransport = (originPlanet.transport_count || 0) + (mission.transport_ships_sent || 0);
+    const patchedFields = {
+      metal: newMetal,
+      crystal: newCrystal,
+      food: newFood,
+      mothership_count: newMothership,
+      scout_count: newScout,
+      fighter_count: newFighter,
+      transport_count: newTransport,
+      last_tick: new Date().toISOString(),
+    };
+    await restRequest(`planets?id=eq.${originPlanet.id}`, { method: 'PATCH', body: JSON.stringify(patchedFields) });
+
+    const idx = myPlanets.findIndex(p => String(p.id) === String(originPlanet.id));
+    if (idx >= 0) myPlanets[idx] = { ...originPlanet, ...patchedFields };
+
+    if (planet && String(planet.id) === String(originPlanet.id)) {
+      localMetal = newMetal;
+      localCrystal = newCrystal;
+      localFood = newFood;
+      planet.mothership_count = newMothership;
+      planet.scout_count = newScout;
+      planet.fighter_count = newFighter;
+      planet.transport_count = newTransport;
+      lastTickLocal = Date.now();
+      renderResources();
+      showToast(`移防艦隊已召回返航,艦隊與物資已回到星球(原訂駐防座標 ${mission.destination_coord} 已取消)`, 'success', 8000);
+    }
+  }
+
+  async function recallRedeployMission(mission) {
+    const shipCounts = {
+      mothership: mission.mothership_ships_sent || 0,
+      scout: mission.scout_ships_sent || 0,
+      fighter: mission.fighter_ships_sent || 0,
+      transport: mission.transport_ships_sent || 0,
+    };
+    const result = await applyRecall('redeploy_missions', mission, shipCounts);
+    if (!result) {
+      showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
+      return;
+    }
+    const remainingSec = (result.plan.newArrivalTime.getTime() - Date.now()) / 1000;
+    const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
+    showToast(`移防艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
+    await loadRedeployMissions();
+  }
+
+  // Try to skip straight past the login screen if this device already has a
+  // remembered, still-valid session.
+  attemptAutoLogin();
+</script>
+<script>
+  // PWA: registers the service worker that lets the game be "installed"
+  // (加入主畫面) and gives it an offline-safe app shell. Deliberately kept in
+  // its own tiny script tag, separate from the main game logic above — this
+  // is purely an install/caching concern, nothing here should ever need to
+  // know about game state. Safe to no-op: browsers that don't support service
+  // workers (or a page opened via plain file://, which isn't a secure
+  // context) just skip this silently and the game itself is completely
+  // unaffected either way.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(err => {
+        console.error('Service worker registration failed:', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
