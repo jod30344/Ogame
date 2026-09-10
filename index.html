@@ -727,7 +727,28 @@
   .fleet-build-hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
   .fleet-build-hint.error { color: var(--warn); }
   .fleet-build-hint.auto-active { color: var(--automation); }
-  .production-card { display: flex; flex-direction: column; align-items: stretch; }
+  /* 艦隊 + 生產排程整合 — 使用者原話:「我想把艦隊跟生產排程整合在一起」,選
+     的方案是把原本「生產排程」分頁(#production-slots/#queue-waiting)的建造
+     進度直接搬進每張 .fleet-detail-block 卡片自己底下,而不是另外開一個分頁
+     放整批清單。.fleet-production-status 是這個新區塊的外層容器,只在該艦種
+     真的有「建造中」或「排隊中」的訂單時才會出現(見 renderFleetRoster());
+     內部沿用 .production-top/.progress-track/.progress-fill/.queue-dots/
+     .queue-summary/.cancel-order-btn/.waiting-entry 這些既有 class,原本就是
+     通用樣式,不需要另外重寫。 */
+  .fleet-production-status {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fleet-production-row { display: flex; flex-direction: column; align-items: stretch; }
+  /* .fleet-production-status already spaces its children with `gap: 10px` —
+     zero out .waiting-entry's own standalone margin-top (meant for when it's
+     a bare top-level sibling, as it still is in the empty-known-planets-style
+     lists elsewhere) so entries here don't get double-spaced. */
+  .fleet-production-status .waiting-entry { margin-top: 0; }
   .production-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
   .waiting-entry {
     background: var(--bg-panel);
@@ -1620,7 +1641,6 @@
     <button class="section-nav-item hidden" data-nav-target="dashboard-section" type="button">總覽</button>
     <button class="section-nav-item" data-nav-target="plots-grid" type="button">建設</button>
     <button class="section-nav-item hidden" data-nav-target="fleet-roster-section" type="button">艦隊</button>
-    <button class="section-nav-item hidden" data-nav-target="ship-production-section" type="button">生產排程</button>
     <button class="section-nav-item hidden" data-nav-target="explore-section" type="button">探索</button>
     <button class="section-nav-item hidden" data-nav-target="known-planets-section" type="button">已知星球</button>
     <button class="section-nav-item hidden" data-nav-target="attack-section" type="button">攻擊</button>
@@ -1778,21 +1798,18 @@
       <div class="plots-grid" id="plots-grid"></div>
     </div>
 
+  <!-- 艦隊 + 生產排程整合成一個分頁 — 使用者原話:「我想把艦隊跟生產排程整合
+       在一起」,選擇的方案是把生產進度直接整合進每張艦型卡片本身(而非只是把
+       兩個分頁的內容搬到同一頁但卡片不變)。原本「生產排程」分頁的
+       #production-slots/#queue-waiting 已經拆掉,對應內容現在由
+       renderFleetRoster() 直接算在每張 .fleet-detail-block 卡片自己的
+       .fleet-production-status 區塊裡(見該函式與其 CSS 註解)。 -->
   <div id="fleet-roster-section" class="hidden">
     <div class="section-label" style="margin-top:30px;">
       <span>艦隊</span>
     </div>
-    <div class="section-note">造好的艦艇可立即出擊,不必等整批完成</div>
+    <div class="section-note">造好的艦艇可立即出擊,不必等整批完成 · 每張卡片下方會顯示該艦種目前的建造進度</div>
     <div class="fleet-card" id="fleet-roster"></div>
-  </div>
-
-  <div id="ship-production-section" class="hidden">
-    <div class="section-label" style="margin-top:30px;">
-      <span>生產排程</span>
-    </div>
-    <div class="section-note">建造數量與按鈕已整合到上方每個艦種卡片裡,建好的艦艇會直接加入艦隊,不必等整批完工</div>
-    <div id="production-slots" style="margin-top:10px;"></div>
-    <div id="queue-waiting"></div>
   </div>
 
   <div id="explore-section" class="hidden">
@@ -2352,12 +2369,13 @@
   // the player could see nothing of the ships they clearly just spent to get
   // there. fleet-top-card is therefore also shown whenever the planet
   // already owns any ships at all (currentFleetTotal() > 0), independent of
-  // the shipyard gate. fleet-roster-section/ship-production-section are
-  // genuine production UI (build buttons, queue) that legitimately still
-  // require a shipyard, so those two keep the original hasShipyard()-only
-  // rule.
+  // the shipyard gate. fleet-roster-section is genuine production UI (build
+  // buttons, queue — the former separate ship-production-section was folded
+  // into this same section's own cards, see renderFleetRoster()) that
+  // legitimately still requires a shipyard, so it keeps the original
+  // hasShipyard()-only rule.
   const FLEET_PRODUCTION_GATED_SECTION_IDS = [
-    'fleet-roster-section', 'ship-production-section',
+    'fleet-roster-section',
   ];
   function updateFleetSectionVisibility() {
     const unlocked = hasShipyard();
@@ -2696,8 +2714,8 @@
     // Keep the 快速跳轉列 pills in sync — see updateSectionNavVisibility()'s own
     // comment for why funneling through here (rather than adding new call
     // sites) is enough to cover every gate in this file, including the
-    // fleet-roster-section/ship-production-section ones set by
-    // updateFleetSectionVisibility() just before it calls this function.
+    // fleet-roster-section one set by updateFleetSectionVisibility() just
+    // before it calls this function.
     updateSectionNavVisibility();
   }
 
@@ -3550,7 +3568,7 @@
   // shared #build-hint any more; this is what lets a "資源不足" message on the
   // 戰鬥機 card show up without touching the 運輸艦 card next to it. Falls back
   // to the default cost/shipyard-count text once it expires (see
-  // refreshBuildHints), which runs every second via renderProductionQueue so
+  // refreshBuildHints), which runs every second via renderFleetRoster so
   // a stale override never lingers past its message's usefulness.
   const buildHintOverrides = {};
   const BUILD_HINT_OVERRIDE_MS = 3000;
@@ -3774,6 +3792,65 @@
   // { margin-top: auto }` on a flex-column `.fleet-detail-block`) so all three
   // cards' build buttons line up at the same height regardless of how long
   // each type's `role` description happens to be.
+  // 單筆「建造中」訂單的區塊 — 原本是「生產排程」分頁 #production-slots 底下
+  // 每一張 .fleet-card.production-card 的內容,現在改成巢狀在艦型卡片自己裡面
+  // 的 .fleet-production-row,所以拿掉了外層 `.fleet-card`(避免卡中卡的重複
+  // 邊框/底色)也拿掉了 shipyardLabel 裡原本重複的艦種名稱(卡片標題本身已經
+  // 顯示是哪一種艦艇,不需要再講一次)。其餘進度條/圓點/取消按鈕邏輯照舊搬過來。
+  function fleetProductionBuildingRowHtml(row) {
+    const shipType = row.ship_type || 'fighter';
+    const rowTypeDef = SHIP_TYPES[shipType] || SHIP_TYPES.fighter;
+    const total = row.count;
+    const secondsPerShip = row.seconds_per_ship || rowTypeDef.baseSeconds;
+    const startedAt = new Date(row.started_at).getTime();
+    const elapsedSec = Math.max(0, (Date.now() - startedAt) / 1000);
+    const shipsDone = Math.min(total, Math.floor(elapsedSec / secondsPerShip));
+    const currentIndex = Math.min(total, shipsDone + 1);
+    const isLastShipDone = shipsDone >= total;
+    const progressInCurrent = isLastShipDone ? 1 : (elapsedSec % secondsPerShip) / secondsPerShip;
+    const secLeftOnCurrent = secondsPerShip - (elapsedSec % secondsPerShip);
+    const etaText = isLastShipDone ? '即將完工' : formatDuration(secLeftOnCurrent) + ' 後這艘完工';
+    const shipyard = ownBuildings.find(b => b.plot_index === row.shipyard_plot_index);
+    const shipyardLabel = shipyard ? `造船廠 LV${shipyard.level} 建造中` : '建造中';
+
+    let dotsOrSummary;
+    if (total <= MAX_QUEUE_DOTS) {
+      let dotsHtml = '';
+      for (let i = 1; i <= total; i++) {
+        const cls = i <= shipsDone ? 'done' : (i === currentIndex ? 'active' : '');
+        dotsHtml += `<div class="queue-dot ${cls}"></div>`;
+      }
+      dotsOrSummary = `<div class="queue-dots">${dotsHtml}</div>`;
+    } else {
+      const remaining = total - currentIndex;
+      dotsOrSummary = `<div class="queue-summary">${remaining > 0 ? `後面還有 ${remaining} 艘排隊中` : '這是最後一艘'}</div>`;
+    }
+
+    return `<div class="fleet-production-row">
+      <div class="production-top">
+        <div>
+          <div class="fleet-count-label">${shipyardLabel}</div>
+          <div class="fleet-count">第 ${currentIndex} / ${total} 艘</div>
+        </div>
+        <div class="movement-eta">${etaText}</div>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progressInCurrent * 100)}%;"></div></div>
+      ${dotsOrSummary}
+      <button class="cancel-order-btn" data-cancel-order="${row.id}" data-remaining="${total - shipsDone}" data-ship-name="${rowTypeDef.name}" type="button">取消這筆訂單</button>
+    </div>`;
+  }
+  // 單筆「排隊中」訂單 — `position` 是這筆訂單在「全星球、跨艦種」佇列裡的真實
+  // 順位(見 renderFleetRoster() 呼叫端如何算出來的註解),不是這張卡片自己這個
+  // 艦種內部的順位,因為 advanceQueue() 本來就是照 queued_at 全域 FIFO 一次處理
+  // 一筆、跟艦種無關,所以顯示的數字必須是全域的才不會誤導玩家。
+  function fleetProductionQueuedRowHtml(row, position) {
+    const rowTypeDef = SHIP_TYPES[row.ship_type || 'fighter'] || SHIP_TYPES.fighter;
+    return `<div class="waiting-entry">
+      <span>排隊中(第 ${position} 順位):${row.count} 艘,等待生產線空出</span>
+      <button class="cancel-order-btn small" data-cancel-order="${row.id}" data-remaining="${row.count}" data-ship-name="${rowTypeDef.name}" type="button">取消</button>
+    </div>`;
+  }
+
   function renderFleetRoster() {
     if (!planet) return;
     const el = document.getElementById('fleet-roster');
@@ -3789,6 +3866,21 @@
       const existing = document.getElementById(`build-count-${type}`);
       if (existing && existing.value) preservedCounts[type] = existing.value;
     });
+    // 艦隊 + 生產排程整合(使用者原話:「我想把艦隊跟生產排程整合在一起」,選的
+    // 方案是把建造進度直接整合進每張艦型卡片本身)——原本獨立的「生產排程」分頁
+    // (#production-slots/#queue-waiting,由已刪除的 renderProductionQueue()
+    // 負責)在這裡被拆開:「建造中」訂單依 ship_type 分組後插進對應卡片;
+    // 「排隊中」訂單一樣先算出全域(跨艦種)FIFO 順位與全域顯示上限
+    // (MAX_QUEUED_ORDERS_SHOWN,跟原本行為一致),再依 ship_type 分配到各自卡
+    // 片——因為 advanceQueue() 本來就是不分艦種、依 queued_at 全域 FIFO 一次處
+    // 理一筆,「順位」這個數字必須維持全域意義才不會誤導玩家。超過全域上限、
+    // 沒有被列出的訂單數量,顯示在所有卡片下方一行共用的提示,而不是硬塞進某
+    // 張特定卡片。
+    const buildingRows = shipQueueRows.filter(r => r.status === 'building').sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
+    const queuedRowsAllSorted = shipQueueRows.filter(r => r.status === 'queued').sort((a, b) => new Date(a.queued_at) - new Date(b.queued_at));
+    const queuedShown = queuedRowsAllSorted.slice(0, MAX_QUEUED_ORDERS_SHOWN).map((row, i) => ({ row, position: i + 1 }));
+    const queuedOverflowCount = queuedRowsAllSorted.length - queuedShown.length;
+
     el.innerHTML = visibleShipTypes().map(type => {
       const def = SHIP_TYPES[type];
       const icon = SHIP_ICONS[type] || '';
@@ -3810,6 +3902,12 @@
       const autoBtnHtml = autoAvailable
         ? `<button class="auto-btn${autoOn ? ' active' : ''}" data-auto-type="${type}" type="button" aria-label="${autoOn ? `關閉${def.name}自動生產` : `開啟${def.name}自動生產`}" title="${autoOn ? '自動生產中(點擊關閉)' : '自動生產:依左側數量排一批,完成後自動補上下一批'}">${AUTO_PRODUCE_ICON}</button>`
         : '';
+      const typeBuildingRows = buildingRows.filter(r => (r.ship_type || 'fighter') === type);
+      const typeQueuedShown = queuedShown.filter(q => (q.row.ship_type || 'fighter') === type);
+      const productionStatusHtml = (typeBuildingRows.length === 0 && typeQueuedShown.length === 0) ? '' : `<div class="fleet-production-status">${
+        typeBuildingRows.map(fleetProductionBuildingRowHtml).join('') +
+        typeQueuedShown.map(q => fleetProductionQueuedRowHtml(q.row, q.position)).join('')
+      }</div>`;
       return `<div class="fleet-detail-block">
         <img class="fleet-detail-bg" src="art/ships/${type}.jpg" alt=""
              onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
@@ -3827,17 +3925,21 @@
             <button class="upgrade" data-build-type="${type}" id="build-btn-${type}" type="button" ${autoOn ? 'disabled' : ''}>造${def.name}</button>
           </div>
           <div class="fleet-build-hint" id="build-hint-${type}"></div>
+          ${productionStatusHtml}
         </div>
       </div>`;
-    }).join('');
+    }).join('') + (queuedOverflowCount > 0
+      ? `<div class="waiting-entry" style="grid-column:1/-1;">還有 ${queuedOverflowCount} 筆訂單等待中(僅顯示前 ${MAX_QUEUED_ORDERS_SHOWN} 筆)</div>`
+      : '');
     refreshBuildHints();
+    renderFleetOverview();
   }
 
   // Default (non-error) hint text for one ship type's build card — cost per
   // ship, or whichever higher-priority reason production isn't available yet
   // (no shipyard, homestead too low). Kept as its own function (rather than
   // inlined in refreshBuildHints) so buildShips() can't accidentally drift
-  // out of sync with what renderProductionQueue shows. No longer mentions the
+  // out of sync with what renderFleetRoster shows. No longer mentions the
   // shipyard/production-line count — per user's request, that's not
   // information a player needs spelled out in the hint.
   function defaultBuildHintText(type) {
@@ -3856,7 +3958,7 @@
     }
     return `每艘 ${typeDef.cost.metal} 金屬 · ${typeDef.cost.crystal} 晶體`;
   }
-  // Runs every second (from renderProductionQueue's countdown tick) so a
+  // Runs every second (from renderFleetRoster's countdown tick) so a
   // temporary validation/error message set by buildShips() (or, for the
   // "waiting on resources/fleet space" case, maybeAutoQueueProduction())
   // shows for a few seconds and then reverts to the default line on its own —
@@ -4162,7 +4264,7 @@
     battleLogInterval = setInterval(pollUpdates, 8000);
     countdownInterval = setInterval(() => {
       renderPlots();
-      renderProductionQueue();
+      renderFleetRoster();
       renderMovementLog();
     }, 1000);
   }
@@ -4245,7 +4347,7 @@
     // rather than waiting for the player to touch a field again.
     updateExploreFoodEstimate();
     renderPlots();
-    renderProductionQueue();
+    renderFleetRoster();
     renderMovementLog();
     pollUpdates();
   }
@@ -4960,13 +5062,16 @@
   // ============================================================
   const UNLOCK_TUTORIALS = [
     { key: 'shipyard-building', title: '🔓 新功能解鎖:造船廠', check: () => fleetTechUnlocked(),
-      body: '拓荒者營地達到 LV2,現在可以在建築格蓋造船廠了!造船廠是生產艦艇、以及解鎖艦隊、生產排程、探索等後續功能的基礎,建議優先蓋一座。' },
+      body: '拓荒者營地達到 LV2,現在可以在建築格蓋造船廠了!造船廠是生產艦艇、以及解鎖艦隊、探索等後續功能的基礎,建議優先蓋一座。' },
     { key: 'intel-center-building', title: '🔓 新功能解鎖:戰情中心', check: () => fleetTechUnlocked(),
       body: '拓荒者營地達到 LV2,現在可以蓋戰情中心了!戰情中心是查看已知星球、艦隊動向、戰報,以及總覽功能的必要建築——帳號內任一顆殖民地蓋一座即可全帳號共用。' },
+    // REVISION: 原本「生產排程」是獨立的一個 key/分頁,使用者要求「把艦隊跟
+    // 生產排程整合在一起」後,建造佇列進度已經直接整合進本分頁每張艦種卡片
+    // 裡(見 renderFleetRoster()),不再是切分頁才看得到的東西,所以這裡的說明
+    // 文字也一併改寫,原本的 'ship-production' key 直接移除(不再有對應分頁需
+    // 要介紹)。
     { key: 'fleet-section', title: '🔓 新功能解鎖:艦隊', check: () => hasShipyard(),
-      body: '造船廠已經蓋好了!上方新增了「艦隊」分頁,可以查看每種艦艇的在家/出征/探索/建造中數量,以及目前的艦隊總數與上限。' },
-    { key: 'ship-production', title: '🔓 新功能解鎖:生產排程', check: () => hasShipyard(),
-      body: '「生產排程」分頁現在可以用了,能在這裡建造偵察機、戰鬥機、運輸艦,並查看目前的建造佇列進度。' },
+      body: '造船廠已經蓋好了!上方新增了「艦隊」分頁,可以在這裡建造偵察機、戰鬥機、運輸艦,查看每種艦艇的在家/出征/探索/建造中數量與目前的艦隊總數上限,建造進度也會直接顯示在每張艦種卡片下方。' },
     { key: 'explore-section', title: '🔓 新功能解鎖:探索', check: () => hasShipyard() && hasIntelCenter(),
       body: '造船廠與戰情中心都已就緒,現在可以派遣艦隊出去探索了!探索有機會帶回資源,也有機會發現其他星球——這是解鎖後續許多功能的關鍵一步。' },
     { key: 'known-planets', title: '🔓 新功能解鎖:已知星球', check: () => hasIntelCenterAnywhere() && hasAnyKnownPlanet(),
@@ -6645,6 +6750,8 @@
     if (buildBtn) buildShips(buildBtn.dataset.buildType);
     const autoBtn = e.target.closest('.auto-btn');
     if (autoBtn) toggleAutoProduce(autoBtn.dataset.autoType, autoBtn);
+    const cancelBtn = e.target.closest('button[data-cancel-order]');
+    if (cancelBtn) onCancelOrderClick(cancelBtn.dataset.cancelOrder, parseInt(cancelBtn.dataset.remaining, 10), cancelBtn.dataset.shipName, cancelBtn);
   });
   fleetRosterEl.addEventListener('change', (e) => {
     const input = e.target.closest('.build-count-input');
@@ -6658,7 +6765,7 @@
     try {
       const rows = await restRequest(`ship_queue?planet_id=eq.${planet.id}&status=neq.done&order=queued_at.asc`);
       shipQueueRows = rows || [];
-      renderProductionQueue();
+      renderFleetRoster();
     } catch (err) {
       console.error('Load ship queue error:', err);
     }
@@ -6768,81 +6875,6 @@
       creditedTypes.forEach(t => flashResource(`${t}-count`, 'success'));
       await saveToServer();
     }
-  }
-
-  function renderProductionQueue() {
-    if (!planet) return;
-    refreshBuildHints();
-
-    const buildingRows = shipQueueRows.filter(r => r.status === 'building').sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
-    const queuedRowsAll = shipQueueRows.filter(r => r.status === 'queued').sort((a, b) => new Date(a.queued_at) - new Date(b.queued_at));
-    const queuedRows = queuedRowsAll.slice(0, MAX_QUEUED_ORDERS_SHOWN);
-
-    const slotsContainer = document.getElementById('production-slots');
-    slotsContainer.innerHTML = buildingRows.map(row => {
-      const shipType = row.ship_type || 'fighter';
-      const rowTypeDef = SHIP_TYPES[shipType] || SHIP_TYPES.fighter;
-      const total = row.count;
-      const secondsPerShip = row.seconds_per_ship || rowTypeDef.baseSeconds;
-      const startedAt = new Date(row.started_at).getTime();
-      const elapsedSec = Math.max(0, (Date.now() - startedAt) / 1000);
-      const shipsDone = Math.min(total, Math.floor(elapsedSec / secondsPerShip));
-      const currentIndex = Math.min(total, shipsDone + 1);
-      const isLastShipDone = shipsDone >= total;
-      const progressInCurrent = isLastShipDone ? 1 : (elapsedSec % secondsPerShip) / secondsPerShip;
-      const secLeftOnCurrent = secondsPerShip - (elapsedSec % secondsPerShip);
-      const etaText = isLastShipDone ? '即將完工' : formatDuration(secLeftOnCurrent) + ' 後這艘完工';
-      const shipyard = ownBuildings.find(b => b.plot_index === row.shipyard_plot_index);
-      const shipyardLabel = shipyard ? `造船廠 LV${shipyard.level} · ${rowTypeDef.name}` : rowTypeDef.name;
-
-      let dotsOrSummary;
-      if (total <= MAX_QUEUE_DOTS) {
-        let dotsHtml = '';
-        for (let i = 1; i <= total; i++) {
-          const cls = i <= shipsDone ? 'done' : (i === currentIndex ? 'active' : '');
-          dotsHtml += `<div class="queue-dot ${cls}"></div>`;
-        }
-        dotsOrSummary = `<div class="queue-dots">${dotsHtml}</div>`;
-      } else {
-        const remaining = total - currentIndex;
-        dotsOrSummary = `<div class="queue-summary">${remaining > 0 ? `後面還有 ${remaining} 艘排隊中` : '這是最後一艘'}</div>`;
-      }
-
-      return `<div class="fleet-card production-card" style="margin-top:10px;">
-        <div class="production-top">
-          <div>
-            <div class="fleet-count-label">${shipyardLabel} 建造中</div>
-            <div class="fleet-count">第 ${currentIndex} / ${total} 艘</div>
-          </div>
-          <div class="movement-eta">${etaText}</div>
-        </div>
-        <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progressInCurrent * 100)}%;"></div></div>
-        ${dotsOrSummary}
-        <button class="cancel-order-btn" data-cancel-order="${row.id}" data-remaining="${total - shipsDone}" data-ship-name="${rowTypeDef.name}" type="button">取消這筆訂單</button>
-      </div>`;
-    }).join('');
-
-    const waitingContainer = document.getElementById('queue-waiting');
-    const overflowCount = queuedRowsAll.length - queuedRows.length;
-    let waitingHtml = queuedRows.map((row, i) => {
-      const rowTypeDef = SHIP_TYPES[row.ship_type || 'fighter'] || SHIP_TYPES.fighter;
-      return `<div class="waiting-entry">
-        <span>排隊中(第 ${i + 1} 順位):${row.count} 艘${rowTypeDef.name},等待生產線空出</span>
-        <button class="cancel-order-btn small" data-cancel-order="${row.id}" data-remaining="${row.count}" data-ship-name="${rowTypeDef.name}" type="button">取消</button>
-      </div>`;
-    }).join('');
-    if (overflowCount > 0) {
-      waitingHtml += `<div class="waiting-entry">還有 ${overflowCount} 筆訂單等待中(僅顯示前 ${MAX_QUEUED_ORDERS_SHOWN} 筆)</div>`;
-    }
-    waitingContainer.innerHTML = waitingHtml;
-
-    document.querySelectorAll('button[data-cancel-order]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        onCancelOrderClick(btn.dataset.cancelOrder, parseInt(btn.dataset.remaining, 10), btn.dataset.shipName, btn);
-      });
-    });
-
-    renderFleetOverview();
   }
 
   // Cancelling refunds the cost of whatever hasn't been built yet (per-ship
