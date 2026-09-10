@@ -609,36 +609,33 @@
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 16px 18px;
-    /* BUG FIX ×2 (user report, twice): first pass used CSS Grid with
-       `align-items: start`, which stopped a quiet card (e.g. 偵察機 with
-       nothing building) from being STRETCHED to the height of a taller
+    /* HISTORY (3 rounds of layout iteration on this one container):
+       round 1 used CSS Grid with `align-items: start` so a quiet card (e.g.
+       偵察機 with nothing building) wouldn't be stretched to match a taller
        sibling — but a grid ROW's own height is still set by its tallest
-       item regardless of align-items, so the row containing that tall
-       sibling still reserved that much vertical space, leaving a big dead
-       gap directly under the short card before the next row started. User
-       called this out again after seeing it in a recording: "沒有生產的卡片
-       因為排版多了一大片空白". Switched to real CSS masonry via multi-column
-       layout (`columns`) instead of grid rows — column-balancing packs
-       items purely by their OWN height with no shared "row" height at all,
-       so a short card can never leave dead space beneath it waiting on a
-       taller neighbor. `column-width: 230px` + `column-count: 3` mirrors
-       the old `repeat(auto-fit, minmax(230px, 1fr))` sizing/breakpoints
-       (never narrower than 230px, never more than 3 columns); items still
-       render top-to-bottom in DOM order (偵察機/戰鬥機/運輸艦/殖民母艦), the
-       browser just decides how many go in column 1 before continuing into
-       column 2 based on actual heights. */
-    columns: 230px 3;
-    column-gap: 18px;
+       item regardless of `align-items`, so the row still reserved that much
+       space, leaving a dead gap under the short card. Round 2 switched to
+       real CSS multi-column masonry (`columns: 230px 3`) so items pack by
+       their own height with no shared row height at all — that genuinely
+       fixed the dead-space complaint, but with only 4 fixed cards it also
+       meant the browser's column balancer would stack two same-height cards
+       into one column while others got their own, an uneven look. ROUND 3
+       (this one): the user said they'd actually rather have every card
+       reserve the SAME fixed slot for its production-schedule area
+       regardless of whether it's in use ("我想直接預留每張卡配的生產排程空
+       間,這樣看起來比較整齊" — see `.fleet-production-status`'s `min-height`
+       and its always-rendered empty state below) — once every card reserves
+       that same space, natural heights are already close to equal, so a
+       plain CSS Grid with the default `align-items: stretch` reads as a
+       clean, evenly aligned grid instead of the masonry column-count
+       mismatch, which is what "比較整齊" (tidier) is really asking for. */
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 18px;
   }
   /* Each block is its own bordered mini-card rather than relying on
      adjacent-sibling divider borders — stays correct with any item count
-     (a 3rd ship type no longer strands oddly on its own row). `break-inside:
-     avoid` is what makes multi-column layout usable here at all — without
-     it the browser would happily slice a card's border/background in half
-     across a column break. `margin-bottom` replaces the old grid `gap` for
-     vertical spacing, since `column-gap` only controls the horizontal
-     gutter BETWEEN columns in a multicol container, not spacing between
-     stacked items within the same column. */
+     (a 3rd ship type no longer strands oddly on its own row). */
   .fleet-detail-block {
     min-width: 0;
     background: var(--bg-deep);
@@ -649,8 +646,6 @@
     flex-direction: column;
     position: relative;
     overflow: hidden;
-    break-inside: avoid;
-    margin-bottom: 18px;
   }
   /* CG 精美圖 — 艦隊/生產排程畫面的 4 張艦艇卡片(偵察機/戰鬥機/運輸艦/殖民母艦,
      `#fleet-roster` 裡的 `.fleet-detail-block`),使用者原話:「來優化艦隊的底圖
@@ -807,20 +802,31 @@
   /* 艦隊 + 生產排程整合 — 使用者原話:「我想把艦隊跟生產排程整合在一起」,選
      的方案是把原本「生產排程」分頁(#production-slots/#queue-waiting)的建造
      進度直接搬進每張 .fleet-detail-block 卡片自己底下,而不是另外開一個分頁
-     放整批清單。.fleet-production-status 是這個新區塊的外層容器,只在該艦種
-     真的有「建造中」或「排隊中」的訂單時才會出現(見 renderFleetRoster());
-     內部沿用 .production-top/.progress-track/.progress-fill/.cancel-order-btn/
-     .waiting-entry 這些既有 class,原本就是通用樣式,不需要另外重寫。(原本還
-     有 .queue-dots/.queue-summary,使用者看過畫面截圖後覺得是雜訊,已經拿掉,
-     見 fleetProductionBuildingRowHtml() 的註解。) */
+     放整批清單。.fleet-production-status 是這個新區塊的外層容器;內部沿用
+     .production-top/.progress-track/.progress-fill/.waiting-entry 這些既有
+     class,原本就是通用樣式,不需要另外重寫。(原本還有 .queue-dots/
+     .queue-summary,使用者看過畫面截圖後覺得是雜訊,已經拿掉,見
+     fleetProductionBuildingRowHtml() 的註解。)
+     BUG FIX(使用者回報):這個區塊原本只在該艦種真的有「建造中」或「排隊
+     中」的訂單時才會出現,沒有訂單的卡片就整塊不見——這也是稍早排版問題的
+     根源之一。使用者後來明確要求:「我想直接預留每張卡配的生產排程空間,這
+     樣看起來比較整齊」。改成無論有沒有訂單都一律渲染這個區塊(見
+     renderFleetRoster()),沒有訂單時顯示 .fleet-production-empty 的淡色提示
+     文字(跟 .battle-empty 同一種「清單目前是空的」慣例寫法)取代整個區塊
+     消失——`min-height` 確保就算只有這行提示文字,佔用的垂直空間也跟一筆真
+     的建造/排隊列一致,讓所有卡片自然對齊,不需要再靠格線/多欄位排版的技巧
+     來湊。 */
   .fleet-production-status {
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px dashed var(--line);
     display: flex;
     flex-direction: column;
+    justify-content: center;
     gap: 10px;
+    min-height: 64px;
   }
+  .fleet-production-empty { color: var(--text-dim); font-size: 13px; }
   .fleet-production-row { display: flex; flex-direction: column; align-items: stretch; }
   /* .fleet-production-status already spaces its children with `gap: 10px` —
      zero out .waiting-entry's own standalone margin-top (meant for when it's
@@ -3885,8 +3891,6 @@
     const isLastShipDone = shipsDone >= total;
     const progressInCurrent = isLastShipDone ? 1 : (elapsedSec % secondsPerShip) / secondsPerShip;
     const remaining = total - shipsDone;
-    const shipyard = ownBuildings.find(b => b.plot_index === row.shipyard_plot_index);
-    const shipyardLabel = shipyard ? `造船廠 LV${shipyard.level}` : '';
 
     // BUG FIX (per the user's own explicit feedback on a screenshot): the
     // old "第 X / Y 艘" line used the same large monospace `.fleet-count`
@@ -3918,10 +3922,14 @@
     // span can't trigger that at all, since there's no text field left to
     // type into. Reducing all the way to 0 remains exactly equivalent to
     // the old all-or-nothing full cancel.
+    // REMOVED (explicit user request, same message as the min-height /
+    // always-render feature below): "可以把造船廠LV10拿掉" — this row used to
+    // lead with a `.fleet-count-label` showing which shipyard plot/level was
+    // building it ("造船廠 LV10"); the user found it unnecessary clutter, so
+    // it's gone — the card's own progress bar/quantity is enough.
     return `<div class="fleet-production-row">
       <div class="production-top">
         <div>
-          ${shipyardLabel ? `<div class="fleet-count-label">${shipyardLabel}</div>` : ''}
           <div class="fleet-production-text">剩
             <button class="order-step-btn" data-order-step="dec" data-order-id="${row.id}" data-ship-name="${rowTypeDef.name}" type="button" aria-label="減少${rowTypeDef.name}建造中的數量">−</button>
             <span class="qty-adjust-value" id="qty-adjust-${row.id}">${remaining}</span>
@@ -4019,9 +4027,21 @@
         : '';
       const typeBuildingRows = buildingRows.filter(r => (r.ship_type || 'fighter') === type);
       const typeQueuedShown = queuedShown.filter(q => (q.row.ship_type || 'fighter') === type);
-      const productionStatusHtml = (typeBuildingRows.length === 0 && typeQueuedShown.length === 0) ? '' : `<div class="fleet-production-status">${
-        typeBuildingRows.map(fleetProductionBuildingRowHtml).join('') +
-        typeQueuedShown.map(q => fleetProductionQueuedRowHtml(q.row, q.position)).join('')
+      // BUG FIX (explicit user request): "我想直接預留每張卡配的生產排程空
+      // 間,這樣看起來比較整齊" — this block used to disappear entirely for a
+      // type with no order at all, which (combined with the grid/masonry
+      // back-and-forth above) was part of why cards ended up uneven. Now
+      // ALWAYS rendered — an empty type shows `.fleet-production-empty`'s
+      // muted placeholder line instead of the block vanishing, and
+      // `.fleet-production-status`'s own `min-height` (see its CSS comment)
+      // reserves the same vertical space either way, so every card's
+      // schedule area lines up regardless of whether that type currently
+      // has anything building or queued.
+      const productionStatusHtml = `<div class="fleet-production-status">${
+        (typeBuildingRows.length === 0 && typeQueuedShown.length === 0)
+          ? `<div class="fleet-production-empty">目前無建造中或排隊中的訂單</div>`
+          : typeBuildingRows.map(fleetProductionBuildingRowHtml).join('') +
+            typeQueuedShown.map(q => fleetProductionQueuedRowHtml(q.row, q.position)).join('')
       }</div>`;
       return `<div class="fleet-detail-block">
         <img class="fleet-detail-bg" src="art/ships/${type}.jpg" alt=""
@@ -7160,6 +7180,27 @@
       if (delta > 0 && baseRemaining >= MAX_SHIPS_PER_ORDER) {
         showToast(`單次最多建造 ${MAX_SHIPS_PER_ORDER} 艘`, 'info');
         return;
+      }
+      // BUG FIX (user report): "我發現底下的+不會被總數給卡控住不能增加" — the
+      // "+" step could keep growing an existing order past the homestead-
+      // derived fleet cap (`.fleet-cap-summary`'s "總數 X / Y") with no check
+      // at all, unlike buildShips()'s own NEW-order path which already
+      // guards this exact thing. Mirrors that same check exactly (same
+      // `fleetCapDataReady` staleness guard, same `fleetNow + N > fleetCap`
+      // comparison, same hint wording) — only for the increasing direction,
+      // since reducing an order can only ever bring the total DOWN, never
+      // push it further over cap.
+      if (delta > 0) {
+        if (!fleetCapDataReady) {
+          showToast('資料同步中,請稍候片刻再試', 'info');
+          return;
+        }
+        const fleetCap = fleetCapForHomesteadLevel(homesteadLevel());
+        const fleetNow = currentFleetTotal();
+        if (fleetNow + 1 > fleetCap) {
+          showToast(`艦隊上限 ${fmt(fleetCap)} 艘(目前共 ${fmt(fleetNow)} 艘),請先升級拓荒者營地以提高上限`, 'danger');
+          return;
+        }
       }
       if (delta > 0 && (localMetal < typeDef.cost.metal || localCrystal < typeDef.cost.crystal)) {
         showToast(`資源不足,無法再增加${typeDef.name}的建造數量`, 'danger');
