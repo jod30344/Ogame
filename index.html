@@ -631,7 +631,24 @@
     padding: 14px 16px;
     display: flex;
     flex-direction: column;
+    position: relative;
+    overflow: hidden;
   }
+  /* CG 精美圖 — 艦隊/生產排程畫面的 4 張艦艇卡片(偵察機/戰鬥機/運輸艦/殖民母艦,
+     `#fleet-roster` 裡的 `.fleet-detail-block`),使用者原話:「來優化艦隊的底圖
+     吧」。跟建築格卡片一樣是固定分類(SHIP_TYPES 的 4 個 key),每種艦艇對應一張
+     固定圖 `art/ships/<ship_type>.jpg`。同一套三層疊層寫法:`.fleet-detail-bg`
+     (圖片,z-index 0)→ `.fleet-detail-bg-overlay`(深色蓋層,z-index 1)→
+     `.fleet-detail-content`(原本的說明文字/數量調整/建造按鈕,z-index 2)。
+     `.fleet-detail-block` 原本就是 flex-column,而且 `.fleet-build-row` 靠
+     `margin-top: auto` 把建造列釘在卡片底部(讓三張卡片不論說明文字長短都對齊)—
+     `.fleet-detail-content` 也給了同樣的 `display:flex; flex-direction:column;
+     flex:1`,讓它撐滿卡片高度,`margin-top:auto` 才有空間可以推、行為完全不變。
+     找不到圖檔時,`.fleet-detail-bg` 的 onerror 一樣會把自己跟緊接著的 overlay
+     一起藏起來,退回原本純底色卡片。 */
+  .fleet-detail-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+  .fleet-detail-bg-overlay { position: absolute; inset: 0; z-index: 1; background: rgba(9,12,20,0.74); }
+  .fleet-detail-content { position: relative; z-index: 2; display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .fleet-role-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .fleet-role-head .fleet-type-name svg { color: var(--ok); }
   .fleet-role-desc { font-size: 13px; color: var(--text-main); line-height: 1.5; }
@@ -3732,18 +3749,23 @@
         ? `<button class="auto-btn${autoOn ? ' active' : ''}" data-auto-type="${type}" type="button" aria-label="${autoOn ? `關閉${def.name}自動生產` : `開啟${def.name}自動生產`}" title="${autoOn ? '自動生產中(點擊關閉)' : '自動生產:依左側數量排一批,完成後自動補上下一批'}">${AUTO_PRODUCE_ICON}</button>`
         : '';
       return `<div class="fleet-detail-block">
-        <div class="fleet-role-head">
-          <span class="fleet-type-name">${icon}${def.name}</span>
+        <img class="fleet-detail-bg" src="art/ships/${type}.jpg" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="fleet-detail-bg-overlay"></div>
+        <div class="fleet-detail-content">
+          <div class="fleet-role-head">
+            <span class="fleet-type-name">${icon}${def.name}</span>
+          </div>
+          <div class="fleet-role-desc">${def.role || ''}</div>
+          <div class="fleet-build-row">
+            <button class="step-btn" data-step="dec" data-ship-type="${type}" type="button" aria-label="減少${def.name}建造數量" ${autoOn ? 'disabled' : ''}>−</button>
+            <input type="number" class="build-count-input" id="build-count-${type}" min="1" max="${MAX_SHIPS_PER_ORDER}" value="${countValue}" data-ship-type="${type}" ${autoOn ? 'disabled' : ''}>
+            <button class="step-btn" data-step="inc" data-ship-type="${type}" type="button" aria-label="增加${def.name}建造數量" ${autoOn ? 'disabled' : ''}>＋</button>
+            ${autoBtnHtml}
+            <button class="upgrade" data-build-type="${type}" id="build-btn-${type}" type="button" ${autoOn ? 'disabled' : ''}>造${def.name}</button>
+          </div>
+          <div class="fleet-build-hint" id="build-hint-${type}"></div>
         </div>
-        <div class="fleet-role-desc">${def.role || ''}</div>
-        <div class="fleet-build-row">
-          <button class="step-btn" data-step="dec" data-ship-type="${type}" type="button" aria-label="減少${def.name}建造數量" ${autoOn ? 'disabled' : ''}>−</button>
-          <input type="number" class="build-count-input" id="build-count-${type}" min="1" max="${MAX_SHIPS_PER_ORDER}" value="${countValue}" data-ship-type="${type}" ${autoOn ? 'disabled' : ''}>
-          <button class="step-btn" data-step="inc" data-ship-type="${type}" type="button" aria-label="增加${def.name}建造數量" ${autoOn ? 'disabled' : ''}>＋</button>
-          ${autoBtnHtml}
-          <button class="upgrade" data-build-type="${type}" id="build-btn-${type}" type="button" ${autoOn ? 'disabled' : ''}>造${def.name}</button>
-        </div>
-        <div class="fleet-build-hint" id="build-hint-${type}"></div>
       </div>`;
     }).join('');
     refreshBuildHints();
