@@ -1335,6 +1335,53 @@
   .known-recon-group { flex-direction: row; align-items: center; gap: 6px; }
   .known-recon-group .ship-input { width: 60px; }
 
+  /* 已知星球 — 格狀卡片 + CG 星球示意圖. 使用者原話:「整體的介面該怎麼優化呢?
+     是否可以配合新的星球CG圖示、或跟別的欄位一樣改成格狀的」。跟建築格/艦隊
+     卡片同一套排版邏輯(auto-fit 格狀 grid),圖片沿用總覽卡片已經在用的同一批
+     `art/planets/1.jpg`~`6.jpg`(見 PLANET_ART_COUNT/planetArtSrcFor()) ——
+     不需要使用者另外準備新圖,只是把既有的星球示意圖池也套用到這裡。已知星球
+     的每一列本來就有一個穩定身分(座標,不會變),所以直接把座標丟給
+     planetArtSrcFor() 當雜湊輸入,同一顆星球每次重新整理都拿到同一張圖,原本
+     用來給「玩家自己星球」用的函式對任何字串/數字輸入都一樣適用。刻意保留
+     `.explore-log-entry` 給探索紀錄/艦隊動向清單繼續用(那兩個維持原本的清單
+     樣式,使用者只針對已知星球提出這次優化),已知星球改用專屬的
+     `.known-planet-card`,避免共用同一個 class 牽動到不相關的清單。 */
+  .known-planets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .known-planet-card {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+  }
+  .known-planet-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+  .known-planet-bg-overlay { position: absolute; inset: 0; z-index: 1; background: rgba(9,12,20,0.74); }
+  .known-planet-content { position: relative; z-index: 2; display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  /* 卡片高度在同一 grid 列裡本來就會被拉齊(grid 預設 align-items: stretch),
+     所以跟艦隊建造卡片一樣可以用 margin-top:auto 把操作列固定貼底,不同卡片
+     即使情報文字長短不一,按鈕仍會對齊在同一條水平線上。 */
+  .known-planet-content .known-planet-actions { margin-top: auto; }
+
+  .colonize-cap-banner {
+    background: #1a2440;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--crystal);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: -4px 0 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+
   .movement-entry.transport-out { border-left: 3px solid var(--ok); }
   .movement-entry.transport-in { border-left: 3px solid var(--crystal); background: #221a10; }
 
@@ -1799,7 +1846,12 @@
       <span>已知星球</span>
     </div>
     <div class="section-note">透過探索發現的星球會記錄在這裡</div>
-    <div id="known-planets-list">
+    <!-- 殖民地數量上限提示 — 使用者原話:「已達殖民地數量上限...不用每發現一個
+         殖民地就提醒一次」。整段完整說明只在這裡顯示一次(見
+         renderKnownPlanets() 的 capReached 判斷),不再重複印在下面每一張已滿
+         的空星球卡片上。 -->
+    <div class="colonize-cap-banner hidden" id="known-planets-cap-banner"></div>
+    <div id="known-planets-list" class="known-planets-grid">
       <div class="battle-empty">尚未發現任何星球</div>
     </div>
   </div>
@@ -2428,10 +2480,20 @@
   // rare-find branch, and known-planets' recon-discovered empty-coordinate
   // branch) — same withheld-button-plus-explanation UX the pre-existing
   // mothership-count gate already uses right next to this.
-  function colonyCapLockedMessageHtml() {
+  // Split into a plain-text getter + the original HTML-wrapping version:
+  // renderKnownPlanets() shows the full sentence ONCE as a section-level
+  // banner (see #known-planets-cap-banner) rather than repeating it on every
+  // single capped-empty-planet row — per explicit user feedback ("不用每發現
+  // 一個殖民地就提醒一次") — and needs the bare text for that banner, while
+  // the exploration log's rare-find branch (line ~8962) keeps using the
+  // original full-html version unchanged.
+  function colonyCapLockedMessageText() {
     const total = colonizedOrPendingPlanetCount();
     const cap = colonyCapForHomesteadLevel(maxHomesteadLevelAccountWide());
-    return `<div class="log-loot colonize-locked">已達殖民地數量上限(${total} / ${cap} 顆,含在途中的殖民艦隊)——把任一顆星球的拓荒者營地升級可以擴增上限</div>`;
+    return `已達殖民地數量上限(${total} / ${cap} 顆,含在途中的殖民艦隊)——把任一顆星球的拓荒者營地升級可以擴增上限`;
+  }
+  function colonyCapLockedMessageHtml() {
+    return `<div class="log-loot colonize-locked">${colonyCapLockedMessageText()}</div>`;
   }
   // 自動化研究院 (Automation Institute) — homestead LV4 unlock, unique per
   // planet like the intel center (see the picker filter in renderPlots()).
@@ -10113,10 +10175,22 @@
   function renderKnownPlanets() {
     const container = document.getElementById('known-planets-list');
     if (!container) return;
+    const capBanner = document.getElementById('known-planets-cap-banner');
 
     if (knownPlanetRows.length === 0) {
       container.innerHTML = '<div class="battle-empty">尚未發現任何星球</div>';
+      if (capBanner) capBanner.classList.add('hidden');
       return;
+    }
+
+    // 殖民地數量上限提示 — 使用者原話:「不用每發現一個殖民地就提醒一次」。
+    // 完整說明(含目前 X/Y 顆數字)只在這裡算一次、顯示一次,下面每一列已滿的
+    // 空星球卡片只會秀一句精簡版(見下方 colonizeBtn 的 capReached 分支)。
+    const capReached = hasReachedColonyCap();
+    const hasEmptyDiscovered = knownPlanetRows.some(kp => kp.target_type === 'empty');
+    if (capBanner) {
+      capBanner.classList.toggle('hidden', !(capReached && hasEmptyDiscovered));
+      if (capReached && hasEmptyDiscovered) capBanner.textContent = colonyCapLockedMessageText();
     }
 
     // 戰情中心等級決定已知星球能看到多少偵查情報,而不是蓋幾間——LV1 只看得到
@@ -10195,10 +10269,13 @@
         const remainingSec = (new Date(pendingColonize.arrival_time).getTime() - Date.now()) / 1000;
         const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將抵達';
         colonizeBtn = `<div class="log-loot">殖民艦隊已出發,${etaText}</div>`;
-      } else if (kp.target_type === 'empty' && hasReachedColonyCap()) {
-        // Same account-wide colony-cap gate as the exploration log, checked
-        // first for the same reason — see that branch's own comment.
-        colonizeBtn = colonyCapLockedMessageHtml();
+      } else if (kp.target_type === 'empty' && capReached) {
+        // Same account-wide colony-cap gate as the exploration log — but
+        // per-row this is now just a short compact note, NOT the full
+        // explanatory sentence (that's shown once, above, as
+        // #known-planets-cap-banner) — see the user-feedback comment on
+        // capReached above.
+        colonizeBtn = `<div class="log-loot colonize-locked">🔒 已達殖民上限</div>`;
       } else if (kp.target_type === 'empty' && (planet.mothership_count || 0) < 1) {
         // Same mothership gate as the exploration log — the known-planet
         // entry itself stays listed either way, only the button is withheld.
@@ -10206,10 +10283,19 @@
       } else if (kp.target_type === 'empty') {
         colonizeBtn = `<button class="upgrade" data-colonize-known="${kp.coord}" type="button">殖民</button>`;
       }
-      return `<div class="explore-log-entry">
-        <div class="log-text">座標 ${kp.coord} · ${typeLabel}</div>
-        <div class="log-loot">${intelLine}</div>
-        <div class="known-planet-actions">${reconGroup}${transportBtn}${invadeBtn}${tradeBtn}${colonizeBtn}</div>
+      // CG 精美圖 — 沿用總覽卡片同一批星球示意圖池(art/planets/1~6.jpg),用
+      // 座標當雜湊輸入(已知星球沒有自己的 planet_id,但座標本身就是穩定不變的
+      // 身分),同一顆星球每次重新整理都拿到同一張圖。見上方 CSS 註解與
+      // planetArtSrcFor() 的原始說明。
+      return `<div class="known-planet-card">
+        <img class="known-planet-bg" src="${planetArtSrcFor(kp.coord)}" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='none';">
+        <div class="known-planet-bg-overlay"></div>
+        <div class="known-planet-content">
+          <div class="log-text">座標 ${kp.coord} · ${typeLabel}</div>
+          <div class="log-loot">${intelLine}</div>
+          <div class="known-planet-actions">${reconGroup}${transportBtn}${invadeBtn}${tradeBtn}${colonizeBtn}</div>
+        </div>
       </div>`;
     }).join('');
 
