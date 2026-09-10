@@ -908,6 +908,23 @@
   .resources.compact .fleet-top-header { margin-bottom: 0; }
   .resources.compact .fleet-cap-summary { padding: 2px 9px; font-size: 12px; }
   .resources.compact .fleet-top-grid { display: none; }
+  /* 縮小狀態下,原本的偵察機/戰鬥機/運輸艦逐項細節格收起來後,使用者反映「艦隊是
+     不是也可以簡單顯示數量」——完全不顯示任何艦種數字感覺資訊太少了。加一行極簡
+     的「圖示+名稱+總數」清單(`renderFleetTopBar()` 同時填入,見該函式自己的
+     comment),平常(未縮小)時用 `display:none` 藏起來,只在 `.compact` 底下才
+     顯示,跟 `.fleet-top-grid` 剛好交替。刻意只顯示總擁有量(shipTypeOwnedCount,
+     在家+出征+探索+建造中+殖民中+移防中的合計),不重現細節格的在家/出征/…等
+     分項,維持「簡單顯示數量」的縮小版定位,細節還是要展開才看得到。 */
+  .fleet-compact-summary { display: none; }
+  .resources.compact .fleet-compact-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 16px;
+    margin-top: 6px;
+  }
+  .fleet-compact-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+  .fleet-compact-chip svg { width: 13px; height: 13px; color: var(--ok); flex-shrink: 0; }
+  .fleet-compact-chip b { color: var(--text-main); font-family: 'Space Mono', monospace; font-weight: 700; font-variant-numeric: tabular-nums; }
   .res-value.flash-success, .fleet-count.flash-success { animation: flashValueUp 0.6s ease; }
   .res-value.flash-danger, .fleet-count.flash-danger { animation: flashValueDown 0.6s ease; }
   @keyframes flashValueUp {
@@ -1609,6 +1626,7 @@
           <div class="fleet-cap-summary" id="fleet-cap-summary"></div>
         </div>
         <div class="fleet-top-grid" id="fleet-top-grid"></div>
+        <div class="fleet-compact-summary" id="fleet-compact-summary"></div>
       </div>
     </div>
   </div>
@@ -3638,6 +3656,17 @@
       const home = planet[`${type}_count`] || 0;
       return fleetTypeBlockHtml(SHIP_ICONS[type] || '', def.name, home, fleetAwayCount(type), fleetExploringCount(type), fleetBuildingCount(type), fleetColonizingCount(type));
     }).join('');
+
+    // 縮小(`.resources.compact`)狀態下用的極簡版本 — 見 `.fleet-compact-summary`
+    // CSS 規則自己的 comment。跟上面的細節格用同一份 fleetTopBarVisibleTypes()
+    // 清單,確保兩邊顯示的艦種永遠一致,只是這裡只列總擁有量,不分在家/出征/探索。
+    const compactEl = document.getElementById('fleet-compact-summary');
+    if (compactEl) {
+      compactEl.innerHTML = fleetTopBarVisibleTypes().map(type => {
+        const def = SHIP_TYPES[type];
+        return `<span class="fleet-compact-chip">${SHIP_ICONS[type] || ''}${def.name} <b>${fmt(shipTypeOwnedCount(type))}</b></span>`;
+      }).join('');
+    }
 
     // Top-right combined total vs. cap — reuses the exact same two numbers
     // buildShips()/queueConstruction() already check against
