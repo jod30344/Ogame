@@ -612,6 +612,17 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 18px;
+    /* BUG FIX (user report): grid items default to `align-items: stretch`,
+       so every `.fleet-detail-block` in a row got forced to the height of
+       the TALLEST sibling — meaning a type with an active/queued order
+       (taller, thanks to `.fleet-production-status`) stretched its quieter
+       neighbors (e.g. 偵察機 with nothing building) down to match, leaving a
+       big empty gap between that card's short content and its build button
+       (still bottom-pinned via `margin-top:auto`). User's own words: "沒有
+       生產時，造偵察機那個欄位應該置頂對齊有再生產的造戰鬥機與造運輸艦的欄
+       位". `align-items: start` makes each card size to its OWN content and
+       sit flush at the top of the row instead of stretching. */
+    align-items: start;
   }
   /* Each block is its own bordered mini-card rather than relying on
      adjacent-sibling divider borders — stays correct with any item count
@@ -665,7 +676,29 @@
      a card ("剩 N 艘建造中") should read at the same size as the rest of the
      card's body text, NOT the big `.fleet-count` styling used for headline
      numbers — this is a small in-card status line, not a headline stat. */
-  .fleet-production-text { font-size: 13px; color: var(--text-main); }
+  .fleet-production-text { font-size: 13px; color: var(--text-main); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  /* Small inline number field replacing the old all-or-nothing cancel button
+     — "剩 [N] 艘建造中" / "排隊中(第 N 順位):[N] 艘..." — per explicit user
+     request ("取消時也不要取消整筆訂單，而是可以讓我直接調整剩X艘建造中的數
+     量"). Sized to sit inline with surrounding text rather than looking like
+     a full form field. `-moz-appearance:textfield` + the WebKit spinner rule
+     below hide the native up/down spinner arrows, which looked cramped at
+     this width; a wide `max` on the element itself is still enough for
+     keyboard/scroll-wheel adjustment. */
+  .qty-adjust-input {
+    width: 56px;
+    padding: 3px 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    color: var(--text-main);
+    font-size: 13px;
+    font-family: 'Space Mono', monospace;
+    text-align: center;
+    -moz-appearance: textfield;
+  }
+  .qty-adjust-input::-webkit-outer-spin-button,
+  .qty-adjust-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   /* Per-card build row (quantity stepper + build button), one per ship-type
      card in #fleet-roster — replaces the old single shared toggle+input row.
      margin-top:auto pins it (and the hint below it) to the bottom of the
@@ -3343,8 +3376,8 @@
   // refunds half — the other half is treated as sunk cost for the work
   // already underway, same "cancelling isn't free" friction philosophy as
   // demolishing itself (see DEMOLISH_COST_FRACTION above). Ship production
-  // orders already had their own cancel button (onCancelOrderClick/
-  // cancelShipOrder below) with a *different* policy — 100% of whatever
+  // orders already had their own adjust-quantity control (adjustShipOrder
+  // below) with a *different* policy — 100% of whatever
   // hasn't been credited yet — which makes sense there because ships credit
   // incrementally as each one finishes, so "remaining count" already nets
   // out the completed portion; a building/demolish job has no partial
@@ -3823,36 +3856,63 @@
     const shipyard = ownBuildings.find(b => b.plot_index === row.shipyard_plot_index);
     const shipyardLabel = shipyard ? `造船廠 LV${shipyard.level}` : '';
 
-    // BUG FIX (per user's own explicit feedback on a screenshot): the old
-    // "第 X / Y 艘" line used the same large monospace `.fleet-count` styling
-    // as the top-bar's big fleet totals, which read as way too prominent
-    // sitting inside a small per-card status row — replaced with a plain
-    // "剩 N 艘建造中" line at normal card body text size
+    // BUG FIX (per the user's own explicit feedback on a screenshot): the
+    // old "第 X / Y 艘" line used the same large monospace `.fleet-count`
+    // styling as the top-bar's big fleet totals, which read as way too
+    // prominent sitting inside a small per-card status row — replaced with a
+    // plain "剩 N 艘建造中" line at normal card body text size
     // (`.fleet-production-text`). Also dropped, per the same feedback: the
     // per-ship ETA text ("N 秒後這艘完工") and the queue-dots/queue-summary
     // progress-sequence indicator — the progress bar below already conveys
     // "how far along," and the user found the extra dots/countdown text
     // noisy rather than informative.
+    //
+    // FEATURE (follow-up user request): "取消時也不要取消整筆訂單，而是可以
+    // 讓我直接調整剩X艘建造中的數量" — the "N" in "剩 N 艘建造中" is now itself
+    // an editable `<input>` (`.qty-adjust-input`, prefilled to the current
+    // remaining count, capped at that same count via `max` since this control
+    // is only for winding an order DOWN — building MORE of this type goes
+    // through the normal quantity+build-button flow above, which now merges
+    // into this very row instead of opening a new one, see buildShips()) with
+    // a small "套用" button next to it (`adjustShipOrder()`) replacing the old
+    // all-or-nothing "取消這筆訂單" button. Typing 0 and applying is exactly
+    // equivalent to the old full cancel.
+    //
+    // BUG FIX (follow-up user report): "我有發現我想手動輸入數量時，他會很快
+    // 地確定1這個數字，讓我很難輸入" — this and `.build-count-input` below used
+    // to be `type="number"`, but Chrome returns `null` for a number input's
+    // `.selectionStart`/`.selectionEnd` and THROWS from `.setSelectionRange()`,
+    // so the focus/cursor-restoration fix in renderFleetRoster() (needed
+    // because this whole grid rebuilds via `innerHTML` every 1s tick) could
+    // restore focus but never the actual cursor position — it silently fell
+    // back to the browser's default caret position (the very start of the
+    // field), so typing "1" then "5" landed as "51" instead of "15". Switched
+    // to `type="text" inputmode="numeric"` (still numeric-only on mobile
+    // keyboards; digit-only filtering is now done by hand via the `input`
+    // listener on `#fleet-roster` below) since text inputs support real
+    // cursor/selection restoration in every browser.
     return `<div class="fleet-production-row">
       <div class="production-top">
         <div>
           ${shipyardLabel ? `<div class="fleet-count-label">${shipyardLabel}</div>` : ''}
-          <div class="fleet-production-text">剩 ${fmt(remaining)} 艘建造中</div>
+          <div class="fleet-production-text">剩 <input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-adjust-input" id="qty-adjust-${row.id}" min="0" max="${remaining}" value="${remaining}" data-order-id="${row.id}"> 艘建造中</div>
         </div>
       </div>
       <div class="progress-track"><div class="progress-fill" style="width:${Math.round(progressInCurrent * 100)}%;"></div></div>
-      <button class="cancel-order-btn" data-cancel-order="${row.id}" data-remaining="${remaining}" data-ship-name="${rowTypeDef.name}" type="button">取消這筆訂單</button>
+      <button class="cancel-order-btn" data-adjust-order="${row.id}" data-ship-name="${rowTypeDef.name}" type="button">套用調整</button>
     </div>`;
   }
   // 單筆「排隊中」訂單 — `position` 是這筆訂單在「全星球、跨艦種」佇列裡的真實
   // 順位(見 renderFleetRoster() 呼叫端如何算出來的註解),不是這張卡片自己這個
   // 艦種內部的順位,因為 advanceQueue() 本來就是照 queued_at 全域 FIFO 一次處理
-  // 一筆、跟艦種無關,所以顯示的數字必須是全域的才不會誤導玩家。
+  // 一筆、跟艦種無關,所以顯示的數字必須是全域的才不會誤導玩家。同一套「調整數
+  // 量取代整筆取消」的控制項也套用在這裡(見上面 fleetProductionBuildingRowHtml
+  // 的註解)。
   function fleetProductionQueuedRowHtml(row, position) {
     const rowTypeDef = SHIP_TYPES[row.ship_type || 'fighter'] || SHIP_TYPES.fighter;
     return `<div class="waiting-entry">
-      <span>排隊中(第 ${position} 順位):${row.count} 艘,等待生產線空出</span>
-      <button class="cancel-order-btn small" data-cancel-order="${row.id}" data-remaining="${row.count}" data-ship-name="${rowTypeDef.name}" type="button">取消</button>
+      <span>排隊中(第 ${position} 順位):<input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-adjust-input" id="qty-adjust-${row.id}" min="0" max="${row.count}" value="${row.count}" data-order-id="${row.id}"> 艘,等待生產線空出</span>
+      <button class="cancel-order-btn small" data-adjust-order="${row.id}" data-ship-name="${rowTypeDef.name}" type="button">套用</button>
     </div>`;
   }
 
@@ -3871,6 +3931,23 @@
       const existing = document.getElementById(`build-count-${type}`);
       if (existing && existing.value) preservedCounts[type] = existing.value;
     });
+    // BUG FIX (user report): this whole card grid rebuilds via `innerHTML`
+    // every second (see the 1s countdownInterval tick that calls this), which
+    // — even though the VALUE was already being preserved above — silently
+    // destroys and recreates every `<input>` node, so an input the player was
+    // actively typing into loses browser focus mid-keystroke. From the
+    // player's side this looked like "the field snaps back to confirming 1"
+    // (they'd type "1" of a longer number like "15", the next tick would
+    // replace the focused node with a fresh unfocused one showing "1", and
+    // the "5" they typed next never landed anywhere). Fix: remember which
+    // input (by id) currently has focus, plus its cursor/selection, and
+    // restore both onto the freshly-rendered replacement node below — so
+    // typing survives the periodic re-render instead of being interrupted by
+    // it, while every other card still keeps ticking live in the background.
+    const activeEl = document.activeElement;
+    const focusedInputId = (activeEl && activeEl.tagName === 'INPUT' && el.contains(activeEl)) ? activeEl.id : null;
+    const focusedSelStart = focusedInputId ? activeEl.selectionStart : null;
+    const focusedSelEnd = focusedInputId ? activeEl.selectionEnd : null;
     // 艦隊 + 生產排程整合(使用者原話:「我想把艦隊跟生產排程整合在一起」,選的
     // 方案是把建造進度直接整合進每張艦型卡片本身)——原本獨立的「生產排程」分頁
     // (#production-slots/#queue-waiting,由已刪除的 renderProductionQueue()
@@ -3924,7 +4001,7 @@
           <div class="fleet-role-desc">${def.role || ''}</div>
           <div class="fleet-build-row">
             <button class="step-btn" data-step="dec" data-ship-type="${type}" type="button" aria-label="減少${def.name}建造數量" ${autoOn ? 'disabled' : ''}>−</button>
-            <input type="number" class="build-count-input" id="build-count-${type}" min="1" max="${MAX_SHIPS_PER_ORDER}" value="${countValue}" data-ship-type="${type}" ${autoOn ? 'disabled' : ''}>
+            <input type="text" inputmode="numeric" pattern="[0-9]*" class="build-count-input" id="build-count-${type}" min="1" max="${MAX_SHIPS_PER_ORDER}" value="${countValue}" data-ship-type="${type}" ${autoOn ? 'disabled' : ''}>
             <button class="step-btn" data-step="inc" data-ship-type="${type}" type="button" aria-label="增加${def.name}建造數量" ${autoOn ? 'disabled' : ''}>＋</button>
             ${autoBtnHtml}
             <button class="upgrade" data-build-type="${type}" id="build-btn-${type}" type="button" ${autoOn ? 'disabled' : ''}>造${def.name}</button>
@@ -3936,6 +4013,19 @@
     }).join('') + (queuedOverflowCount > 0
       ? `<div class="waiting-entry" style="grid-column:1/-1;">還有 ${queuedOverflowCount} 筆訂單等待中(僅顯示前 ${MAX_QUEUED_ORDERS_SHOWN} 筆)</div>`
       : '');
+    // Restore focus/cursor onto the freshly-rendered replacement node — see
+    // the matching comment above `focusedInputId`'s declaration for why this
+    // is needed at all (innerHTML rebuild destroys the actual focused DOM
+    // node every tick, even though its VALUE was already being preserved).
+    if (focusedInputId) {
+      const refocused = document.getElementById(focusedInputId);
+      if (refocused) {
+        refocused.focus();
+        if (focusedSelStart != null && typeof refocused.setSelectionRange === 'function') {
+          try { refocused.setSelectionRange(focusedSelStart, focusedSelEnd); } catch (err) { /* some input types don't support it — harmless */ }
+        }
+      }
+    }
     refreshBuildHints();
     renderFleetOverview();
   }
@@ -5942,7 +6032,7 @@
         await loadConstructionQueue();
         return;
       }
-      // Claim guard mirrors cancelShipOrder's own pattern — matching status
+      // Claim guard mirrors adjustShipOrder's own pattern — matching status
       // means a concurrent completion (this tab, another tab, or the next
       // pollUpdates tick) can't be silently overwritten or double-refunded.
       const claimed = await restRequest(`construction_queue?id=eq.${rowId}&status=eq.${row.status}`, {
@@ -6469,17 +6559,55 @@
     flashResource('crystal-value', 'danger');
     await saveToServer();
 
-    await restRequest('ship_queue', {
-      method: 'POST',
-      body: JSON.stringify({
-        planet_id: planet.id,
-        player_name: planet.player_name,
-        ship_type: type,
-        count: count,
-        queued_at: new Date().toISOString(),
-        status: 'queued',
-      }),
-    });
+    // FEATURE (explicit user request): "我認為都是生產，同一種艦種的生產不需
+    // 要另外在開一個序列，直接把數量加進去同一個序列就好(避免欄位無限拉長)" —
+    // if this planet already has a not-yet-done `ship_queue` row of the SAME
+    // ship type (either actively "building" or still "queued"), grow that
+    // one row instead of inserting a parallel one, so repeat orders of a type
+    // you're already producing don't pile up as a separate line every time.
+    // Re-fetch the row fresh from the server (rather than trusting the
+    // possibly slightly-stale `shipQueueRows` client cache) so the merge
+    // starts from an accurate count, and CAS-guard the PATCH the same way
+    // every other mutation in this file does — a lost race (the row finished
+    // or was adjusted to 0 by another tab in the same instant) falls back to
+    // inserting a fresh row rather than silently dropping the player's order.
+    const existingRowCached = shipQueueRows.find(r => (r.ship_type || 'fighter') === type && r.status !== 'done');
+    let merged = false;
+    if (existingRowCached) {
+      const freshRows = await restRequest(`ship_queue?id=eq.${existingRowCached.id}&select=*`);
+      const freshRow = freshRows && freshRows[0];
+      if (freshRow && freshRow.status !== 'done') {
+        const newCount = freshRow.count + count;
+        const patchBody = { count: newCount };
+        if (freshRow.status === 'building') {
+          // Recompute complete_at so the dashboard's front-of-queue ETA
+          // (which reads complete_at directly, see dashboardEtaText()) stays
+          // accurate — started_at/seconds_per_ship are untouched, only the
+          // total runway grows.
+          const secondsPerShip = freshRow.seconds_per_ship || typeDef.baseSeconds;
+          const startedAt = new Date(freshRow.started_at);
+          patchBody.complete_at = new Date(startedAt.getTime() + newCount * secondsPerShip * 1000).toISOString();
+        }
+        const claimed = await restRequest(`ship_queue?id=eq.${freshRow.id}&status=eq.${freshRow.status}&count=eq.${freshRow.count}`, {
+          method: 'PATCH',
+          body: JSON.stringify(patchBody),
+        });
+        merged = !!(claimed && claimed.length > 0);
+      }
+    }
+    if (!merged) {
+      await restRequest('ship_queue', {
+        method: 'POST',
+        body: JSON.stringify({
+          planet_id: planet.id,
+          player_name: planet.player_name,
+          ship_type: type,
+          count: count,
+          queued_at: new Date().toISOString(),
+          status: 'queued',
+        }),
+      });
+    }
     setBuildHintOverride(type, `已加入建造隊列:${count} 艘${typeDef.name}`, false);
     await advanceQueue();
     await loadShipQueue();
@@ -6755,14 +6883,60 @@
     if (buildBtn) buildShips(buildBtn.dataset.buildType);
     const autoBtn = e.target.closest('.auto-btn');
     if (autoBtn) toggleAutoProduce(autoBtn.dataset.autoType, autoBtn);
-    const cancelBtn = e.target.closest('button[data-cancel-order]');
-    if (cancelBtn) onCancelOrderClick(cancelBtn.dataset.cancelOrder, parseInt(cancelBtn.dataset.remaining, 10), cancelBtn.dataset.shipName, cancelBtn);
+    // "套用調整"/"套用" — reads the CURRENT value out of the row's own
+    // `.qty-adjust-input` (found by `data-order-id`, not by `.closest`, since
+    // the button and the input are siblings inside the same row/entry, not
+    // nested) rather than a `data-remaining` snapshot taken at render time,
+    // so whatever the player last typed is what gets applied.
+    const adjustBtn = e.target.closest('button[data-adjust-order]');
+    if (adjustBtn) {
+      const orderId = adjustBtn.dataset.adjustOrder;
+      const qtyInput = fleetRosterEl.querySelector(`.qty-adjust-input[data-order-id="${orderId}"]`);
+      const newCount = qtyInput ? parseInt(qtyInput.value, 10) : NaN;
+      adjustShipOrder(orderId, isNaN(newCount) ? 0 : newCount, adjustBtn.dataset.shipName, adjustBtn);
+    }
   });
   fleetRosterEl.addEventListener('change', (e) => {
-    const input = e.target.closest('.build-count-input');
-    if (!input) return;
-    const val = parseInt(input.value, 10);
-    input.value = Math.min(MAX_SHIPS_PER_ORDER, Math.max(1, isNaN(val) ? 1 : val));
+    const buildInput = e.target.closest('.build-count-input');
+    if (buildInput) {
+      const val = parseInt(buildInput.value, 10);
+      buildInput.value = Math.min(MAX_SHIPS_PER_ORDER, Math.max(1, isNaN(val) ? 1 : val));
+      return;
+    }
+    // The adjust-quantity field is a wind-DOWN-only control (building more of
+    // a type goes through the build-count-input/build button above, which
+    // now merges into the existing row — see buildShips()), so clamp to
+    // [0, its own `max` attribute] rather than the build input's [1, MAX_SHIPS_PER_ORDER].
+    const qtyInput = e.target.closest('.qty-adjust-input');
+    if (qtyInput) {
+      // `getAttribute('max')`, not `.max` — now that this is `type="text"`
+      // (see the fleetProductionBuildingRowHtml/fleetProductionQueuedRowHtml
+      // comments for why), the `.max` IDL property is not guaranteed to
+      // reflect the attribute for every input type across browsers, so read
+      // the attribute directly instead of relying on that reflection.
+      const max = parseInt(qtyInput.getAttribute('max'), 10) || 0;
+      const val = parseInt(qtyInput.value, 10);
+      qtyInput.value = Math.min(max, Math.max(0, isNaN(val) ? max : val));
+    }
+  });
+  // Digit-only filtering for the two quantity inputs above — both switched
+  // from `type="number"` to `type="text" inputmode="numeric"` (see the
+  // comments where they're built) so that this round's focus/cursor
+  // restoration in renderFleetRoster() actually works, which means the
+  // browser's own numeric-only input filtering no longer applies, so it's
+  // done by hand here on every keystroke instead. Recomputes the cursor
+  // position relative to how many characters got stripped, so typing mid-
+  // string still lands in the right place rather than jumping to the end.
+  fleetRosterEl.addEventListener('input', (e) => {
+    const numInput = e.target.closest('.build-count-input, .qty-adjust-input');
+    if (!numInput) return;
+    const digitsOnly = numInput.value.replace(/[^0-9]/g, '');
+    if (digitsOnly !== numInput.value) {
+      const removedBefore = numInput.value.slice(0, numInput.selectionStart).replace(/[0-9]/g, '').length;
+      const pos = Math.max(0, numInput.selectionStart - removedBefore);
+      numInput.value = digitsOnly;
+      try { numInput.setSelectionRange(pos, pos); } catch (err) { /* harmless */ }
+    }
   });
 
   async function loadShipQueue() {
@@ -6882,44 +7056,59 @@
     }
   }
 
-  // Cancelling refunds the cost of whatever hasn't been built yet (per-ship
-  // cost is fixed, so "remaining count × unit cost" is exact regardless of
-  // how much of the order already completed) — protects against a fat-finger
-  // 1000-ship order eating resources you actually needed elsewhere.
-  function onCancelOrderClick(rowId, remainingCount, shipName, btn) {
-    openConfirmModal(
-      '確認取消訂單',
-      `取消這筆訂單,剩餘 ${fmt(remainingCount)} 艘${shipName || ''}的費用會退還到資源;已經完工的艘數不受影響。`,
-      '取消訂單',
-      () => cancelShipOrder(rowId, btn)
-    );
-  }
-
-  async function cancelShipOrder(rowId, btn) {
+  // FEATURE (replaces the old all-or-nothing cancel, per explicit user
+  // request: "取消時也不要取消整筆訂單，而是可以讓我直接調整剩X艘建造中的數
+  // 量") — `newRemaining` comes straight from the row's own `.qty-adjust-input`
+  // (see the fleetRosterEl click-delegation handler), already clamped to
+  // [0, current count] by that field's own `change` handler and `max`
+  // attribute, so this only ever WINDS AN ORDER DOWN (building more of a type
+  // goes through the normal build-count-input/build button instead, which
+  // now merges into this same row — see buildShips()). Reducing to exactly 0
+  // is the direct equivalent of the old full-cancel. Refund policy unchanged
+  // from the old cancelShipOrder(): 100% of whatever's being given up,
+  // per-ship cost is fixed so "reduced-by × unit cost" is exact regardless of
+  // how much of the order already completed.
+  async function adjustShipOrder(rowId, newRemaining, shipName, btn) {
     if (btn) btn.disabled = true;
     try {
       const rows = await restRequest(`ship_queue?id=eq.${rowId}&select=*`);
       const row = rows && rows[0];
       if (!row || row.status === 'done') {
-        showToast('這筆訂單已經處理完成,無法取消', 'info');
+        showToast('這筆訂單已經處理完成,無法調整', 'info');
         await loadShipQueue();
         return;
       }
       const typeDef = SHIP_TYPES[row.ship_type || 'fighter'] || SHIP_TYPES.fighter;
+      const clamped = Math.max(0, Math.min(row.count, Math.floor(newRemaining)));
+      if (clamped === row.count) {
+        // Nothing actually changed (e.g. player retyped the same number) —
+        // no-op rather than a pointless PATCH + toast.
+        return;
+      }
+      const reducedBy = row.count - clamped;
+      const patchBody = clamped === 0 ? { status: 'done' } : { count: clamped };
+      if (clamped > 0 && row.status === 'building') {
+        // Shrinking a still-in-progress row needs its complete_at pulled in
+        // too (started_at/seconds_per_ship stay the same) — same recompute
+        // buildShips() does in the opposite direction when merging MORE in.
+        const secondsPerShip = row.seconds_per_ship || typeDef.baseSeconds;
+        const startedAt = new Date(row.started_at);
+        patchBody.complete_at = new Date(startedAt.getTime() + clamped * secondsPerShip * 1000).toISOString();
+      }
       // Claim guard mirrors resolveShipQueue's own pattern — matching both
       // status and count means a concurrent completion (this tab or another)
       // can't be silently overwritten or double-refunded.
       const claimed = await restRequest(`ship_queue?id=eq.${rowId}&status=eq.${row.status}&count=eq.${row.count}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'done' }),
+        body: JSON.stringify(patchBody),
       });
       if (!claimed || claimed.length === 0) {
         showToast('生產進度剛更新,請重新確認後再試一次', 'info');
         await loadShipQueue();
         return;
       }
-      const refundMetal = row.count * typeDef.cost.metal;
-      const refundCrystal = row.count * typeDef.cost.crystal;
+      const refundMetal = reducedBy * typeDef.cost.metal;
+      const refundCrystal = reducedBy * typeDef.cost.crystal;
       if (planet) {
         localMetal += refundMetal;
         localCrystal += refundCrystal;
@@ -6928,11 +7117,16 @@
         flashResource('crystal-value', 'success');
         await saveToServer();
       }
-      showToast(`已取消訂單,退回 ${fmt(refundMetal)} 金屬 · ${fmt(refundCrystal)} 晶體`, 'success');
+      showToast(
+        clamped === 0
+          ? `已取消訂單,退回 ${fmt(refundMetal)} 金屬 · ${fmt(refundCrystal)} 晶體`
+          : `已減少 ${fmt(reducedBy)} 艘${shipName || typeDef.name},退回 ${fmt(refundMetal)} 金屬 · ${fmt(refundCrystal)} 晶體`,
+        'success'
+      );
       await loadShipQueue();
     } catch (err) {
-      console.error('Cancel ship order error:', err);
-      showToast('取消失敗,請稍後再試', 'danger');
+      console.error('Adjust ship order error:', err);
+      showToast('調整失敗,請稍後再試', 'danger');
     } finally {
       if (btn) btn.disabled = false;
     }
