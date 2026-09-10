@@ -10835,7 +10835,15 @@
   // completed, so that log entry's "殖民這顆星球" button should be free to
   // reappear (renderExplorationLog()'s pendingColonize lookup already stops
   // finding this mission once colonizationRows excludes resolved rows).
-  async function resolveRecalledColonization(mission) {
+  // Shared refund path for a colonization mission that will NOT be founding
+  // a new colony after all — used both by an explicit mid-flight recall
+  // (resolveRecalledColonization()) and by the arrived-but-target-already-
+  // occupied BUG FIX below (resolveOneColonization()'s occupied-coord check).
+  // Both cases are the same situation from the origin planet's point of
+  // view: the whole committed fleet + metal/crystal/food never actually
+  // founded anything and simply comes home in full — only the toast wording
+  // differs (why it's coming back).
+  async function refundColonizationFleetToOrigin(mission, toastMessage) {
     const rows = await restRequest(`planets?id=eq.${mission.origin_planet_id}&select=*`);
     const originPlanet = rows && rows[0];
     if (!originPlanet) return;
@@ -10846,10 +10854,11 @@
     // the fleet's own travel-upkeep pre-payment — that's a separate deduction
     // (see launchColonization()'s applyRecall()-independent
     // missionFoodCost() draw) already refunded proportionally by
-    // applyRecall() itself when the recall was first requested. This
+    // applyRecall() itself when a recall was first requested (a no-op cost
+    // for the occupied-coord case below, which was never recalled). This
     // food_sent amount was earmarked as the NEW colony's starting stock,
-    // which never came to be since the mission never arrived — so it comes
-    // back to the origin in full here, same as metal_sent/crystal_sent.
+    // which never came to be since no colony was actually founded — so it
+    // comes back to the origin in full here, same as metal_sent/crystal_sent.
     const newFood = res.food + (mission.food_sent || 0);
     const newMothership = (originPlanet.mothership_count || 0) + (mission.mothership_ships_sent || 0);
     const newScout = (originPlanet.scout_count || 0) + (mission.scout_ships_sent || 0);
@@ -10878,8 +10887,14 @@
       planet.transport_count = newTransport;
       lastTickLocal = Date.now();
       renderResources();
-      showToast(`殖民艦隊已召回返航,艦隊與物資已回到星球(座標 ${mission.target_coord} 未被殖民)`, 'success', 8000);
+      if (toastMessage) showToast(toastMessage, 'success', 8000);
     }
+  }
+  async function resolveRecalledColonization(mission) {
+    await refundColonizationFleetToOrigin(
+      mission,
+      `殖民艦隊已召回返航,艦隊與物資已回到星球(座標 ${mission.target_coord} 未被殖民)`
+    );
   }
 
   async function resolveArrivedColonizations() {
@@ -10916,6 +10931,60 @@
 
     if (mission.recalled) {
       await resolveRecalledColonization(mission);
+      return;
+    }
+
+    // BUG FIX: this function used to unconditionally create a new `planets`
+    // row at mission.target_coord on arrival, with NO check for whether that
+    // coordinate had since been colonized by someone else — a player who
+    // never re-偵查'd a stale "無人殖民地" known-planets entry (or who simply
+    // lost a race to another colonizer targeting the same coord) would end
+    // up with the game silently creating a SECOND planets row stacked at the
+    // same coordinate, which nothing else in this file expects (every
+    // coord-keyed lookup elsewhere — attack targeting, known_planets
+    // upserts, etc. — assumes at most one planet per coord). Found while
+    // discussing with the user whether 偵查-ing an already-known "empty"
+    // coordinate before colonizing is actually necessary; confirmed via
+    // code review that resolveOneColonization() never re-checked occupancy
+    // at all, at either launch or arrival. Fixed by checking live, right at
+    // arrival (the CAS claim above already guarantees only one caller
+    // reaches this point for this mission), whether a planet now exists at
+    // the target coord — if so, the colonization fails and the whole
+    // committed fleet + resources return home via the exact same refund
+    // path as an explicit recall (refundColonizationFleetToOrigin()) rather
+    // than vanishing or creating a duplicate. The player's known_planets
+    // entry for that coord is also refreshed to the real occupant (type +
+    // name) so it stops showing the stale "無人殖民地" status that led to
+    // the wasted trip — deliberately left last_scouted_at at null rather
+    // than backfilling full recon-level intel (turret power, fleet counts,
+    // etc.), since bumping into an occupant on a failed colonization run
+    // isn't the same as actually running a proper 偵查 on them.
+    const occupantRows = await restRequest(`planets?coord=eq.${mission.target_coord}&select=*&order=id.asc&limit=1`);
+    const occupant = occupantRows && occupantRows[0];
+    if (occupant) {
+      await refundColonizationFleetToOrigin(
+        mission,
+        `座標 ${mission.target_coord} 已被搶先殖民,殖民艦隊撲空返航,艦隊與物資已回到原本星球`
+      );
+      try {
+        await restRequest(`known_planets?on_conflict=owner_player_name,coord`, {
+          method: 'POST',
+          headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+          body: JSON.stringify({
+            owner_player_name: mission.player_name,
+            coord: mission.target_coord,
+            target_type: occupant.is_npc ? 'npc' : 'player',
+            target_player_name: occupant.player_name,
+            last_scouted_at: null,
+          }),
+        });
+        await loadKnownPlanets();
+      } catch (err) {
+        // Best-effort refresh only — the fleet/resource refund above already
+        // completed and is what actually matters; a failure here just means
+        // the known-planets entry stays stale until the next recon.
+        console.error('Refresh known_planets after failed colonization error:', err);
+      }
       return;
     }
 
