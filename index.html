@@ -488,7 +488,16 @@
     border: 1px solid var(--line);
     background: var(--bg-panel);
     color: var(--text-main);
+    /* Per user request ("我希望有提醒時可以進行點擊跳轉") — this used to be a
+       plain, inert `<span>`; it's now a real `<button data-goto-planet>`
+       (see renderDashboardOverview()'s `badges` array) that jumps straight
+       to the first colony it's actually about, same as a `.dash-goto-btn`
+       「前往」click. Font/family reset since a `<button>` doesn't inherit
+       either by default the way a `<span>` did. */
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
   }
+  .dash-badge:hover { filter: brightness(1.15); }
   .dash-badge.attack { border-color: var(--warn); color: var(--warn); background: rgba(255,107,107,0.08); }
   .dash-badge.transport, .dash-badge.idle { border-color: var(--crystal); color: var(--crystal); background: rgba(240,168,80,0.08); }
   .dashboard-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
@@ -9649,15 +9658,23 @@
     let grandMetalRate = 0, grandCrystalRate = 0, grandFoodRate = 0;
     let grandMetalStock = 0, grandCrystalStock = 0, grandFoodStock = 0;
     let grandFleetHome = 0, grandFleetExploring = 0, grandFleetCap = 0;
-    let idleCount = 0; // OPTIMIZATION ROUND: feeds both the idle badge and the per-card outline below
+    // idleCount was a bare number here until the click-to-jump badge revision
+    // below needed a concrete FIRST planet to jump to — replaced by
+    // `idlePlanets` (declared alongside `exploreIdlePlanets` further down),
+    // whose own `.length` now feeds the badge's displayed count instead.
     // OPTIMIZATION ROUND addition (user request: "乾脆也把閒置的星球顯示出來,
     // 玩家可以決定要不要前往來派任探索") — colonies that COULD explore
     // (shipyard + 戰情中心 both built, same prerequisite as exploreVisible in
     // updateActionSectionVisibility()) but have no exploration mission out
-    // right now. Separate from idleCount above — this is specifically about
-    // exploration, not construction/ship-production idleness, and a colony
-    // can be idle on one axis without being idle on the other.
+    // right now. Separate from `idlePlanets` below — this is specifically
+    // about exploration, not construction/ship-production idleness, and a
+    // colony can be idle on one axis without being idle on the other.
     const exploreIdlePlanets = [];
+    // Per user request ("我希望有提醒時可以進行點擊跳轉") — the 建設/造船廠
+    // idle badge below needs a concrete FIRST planet to jump to when clicked,
+    // same reason exploreIdlePlanets (right above) already tracks its own
+    // list instead of `idleCount` staying a bare number.
+    const idlePlanets = [];
 
     const planetCardsHtml = myPlanets.map((p, i) => {
       const buildings = buildingsByPlanet[p.id] || [];
@@ -9691,7 +9708,7 @@
       // Per user request ("請系統判斷我每個星球的艦隊數量是否已達上限,不然我
       // 造船廠閒置也不用通知我可安排生產") — an idle shipyard with no room left
       // under this planet's own 艦隊上限 isn't actually actionable, so it
-      // shouldn't get the "⚠ 可安排新生產" nudge (or count toward idleCount/
+      // shouldn't get the "⚠ 可安排新生產" nudge (or count toward `idlePlanets`/
       // cardIdle below). Mirrors currentFleetTotal()'s exact accounting
       // (home + exploring + building + colonizing + redeploying[out] +
       // attacking[out] + transporting[out]) and fleetCapForHomesteadLevel(),
@@ -9719,10 +9736,11 @@
         : '';
 
       const cardIdle = !front && (!hasShipyardHere || shipyardActionableIdle);
-      if (cardIdle) idleCount++;
 
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
       const name = p.nickname ? p.nickname : `座標 ${p.coord}`;
+
+      if (cardIdle) idlePlanets.push({ id: p.id, name });
 
       const hasIntelCenterHere = buildings.some(b => b.building_type === 'intel_center');
       if (hasShipyardHere && hasIntelCenterHere && !exploring) {
@@ -9851,11 +9869,21 @@
     // zero-reading-required "does anything need me right now" summary above
     // everything else, so a player with many colonies doesn't have to scan
     // every card just to find out nothing's wrong.
+    // REVISION (user request: "我希望有提醒時可以進行點擊跳轉") — each badge is
+    // now a real `<button data-goto-planet="...">` (same attribute the alert
+    // entries' own 前往 buttons and the planet cards' own 前往 buttons already
+    // use, wired up by the SAME event-delegation loop below) instead of an
+    // inert `<span>`, jumping straight to whichever colony the badge is
+    // actually about — the first attack/transport alert's target planet for
+    // those two, or the first idle/explore-idle colony in list order for the
+    // other two. With N>1 matches there's no single "the" planet a click
+    // could mean, so it jumps to the first one (list order = same order the
+    // per-planet cards below render in) rather than doing nothing.
     const badges = [];
-    if (attackRows.length > 0) badges.push(`<span class="dash-badge attack">⚠ ${attackRows.length} 個攻擊警報</span>`);
-    if (transportRows.length > 0) badges.push(`<span class="dash-badge transport">⚠ ${transportRows.length} 個運輸待審核</span>`);
-    if (idleCount > 0) badges.push(`<span class="dash-badge idle">⚠ ${idleCount} 個殖民地閒置</span>`);
-    if (exploreIdlePlanets.length > 0) badges.push(`<span class="dash-badge idle">⚠ ${exploreIdlePlanets.length} 個殖民地可派遣探索</span>`);
+    if (attackRows.length > 0) badges.push(`<button class="dash-badge attack" type="button" data-goto-planet="${attackRows[0].defender_planet_id}">⚠ ${attackRows.length} 個攻擊警報</button>`);
+    if (transportRows.length > 0) badges.push(`<button class="dash-badge transport" type="button" data-goto-planet="${transportRows[0].defender_planet_id}">⚠ ${transportRows.length} 個運輸待審核</button>`);
+    if (idlePlanets.length > 0) badges.push(`<button class="dash-badge idle" type="button" data-goto-planet="${idlePlanets[0].id}">⚠ ${idlePlanets.length} 個殖民地閒置</button>`);
+    if (exploreIdlePlanets.length > 0) badges.push(`<button class="dash-badge idle" type="button" data-goto-planet="${exploreIdlePlanets[0].id}">⚠ ${exploreIdlePlanets.length} 個殖民地可派遣探索</button>`);
     summaryEl.innerHTML = badges.join('');
     summaryEl.classList.toggle('hidden', badges.length === 0);
 
@@ -9879,8 +9907,10 @@
     // button) — same reasoning as every other renderXXX() in this file that
     // rebuilds its container's innerHTML wholesale every refresh: cheaper
     // to rebind twice per poll cycle than to leak one stale listener per
-    // button per planet per poll.
-    [alertsEl, planetsEl].forEach(container => {
+    // button per planet per poll. `summaryEl` (the badge strip) joined this
+    // list once its own badges became real `data-goto-planet` buttons too —
+    // see the REVISION comment above the `badges` array.
+    [summaryEl, alertsEl, planetsEl].forEach(container => {
       container.querySelectorAll('button[data-goto-planet]').forEach(btn => {
         btn.addEventListener('click', () => {
           const target = myPlanets.find(p => String(p.id) === String(btn.dataset.gotoPlanet));
