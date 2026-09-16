@@ -1278,6 +1278,21 @@
      this tab — same treatment 總覽's own drag-target-valid card glow uses. */
   .planet-tab.drag-target-valid { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(79, 209, 165, 0.35); }
 
+  /* 總覽's own planet pill row (see the HTML comment right above
+     #dashboard-planet-switcher) — reuses `.planet-tab` for each pill so it
+     looks identical to the per-planet `.planet-switcher` bar, but this one
+     is a plain in-flow row (not `position: sticky`, no `--section-nav-height`
+     offset math) since 總覽 already dropped every sticky bar on purpose; it
+     also wraps onto multiple lines instead of scrolling sideways, since
+     without a sticky top edge to protect there's no reason to force a single
+     row. */
+  .dashboard-planet-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 16px;
+  }
+
   /* Fleet resource card in the sticky bar */
   .res-card.fleet::before { background: var(--ok); }
   .res-card.fleet.wide { grid-column: 1 / -1; }
@@ -1842,6 +1857,19 @@
          across three separate lists. The summary badges above stay: they
          answer "do I need to look at anything at all" without scrolling the
          grid, which per-card detail doesn't replace. -->
+    <!-- Per user request ("我想讓總覽也有第二張圖片的星球列表，可以更直觀的跳往")
+         — 總覽 hid the per-planet `.planet-switcher` pill bar entirely when it
+         became its own page (see the big REVISION comment right below this
+         section for why), leaving the rich `.dash-planet-card` grid further
+         down as the only way to jump to a specific colony. That grid is a
+         lot to scan through just to jump somewhere though, so this brings
+         back the SAME compact pill-tab affordance from `.planet-switcher`
+         (same `.planet-tab` look, same home-mark/nickname logic) as a plain
+         non-sticky row right at the top of 總覽 itself — clicking a pill here
+         exits 總覽 and jumps straight to that colony, same as a card's own
+         「前往」button, just one click away instead of scrolling down to find
+         the right card first. Rendered by renderDashboardPlanetSwitcher(). -->
+    <div class="dashboard-planet-switcher hidden" id="dashboard-planet-switcher"></div>
     <div class="dashboard-summary hidden" id="dashboard-summary"></div>
     <div class="dashboard-grand-totals" id="dashboard-grand-totals"></div>
     <div class="dashboard-alerts" id="dashboard-alerts"></div>
@@ -4515,6 +4543,10 @@
     // above, for the same reason — see updateDragHintVisibility()'s own
     // comment for what this actually toggles.
     updateDragHintVisibility();
+    // Same piggyback reasoning again — 總覽's own planet-pill row (see its
+    // HTML comment) needs refreshing at exactly the same moments (planet
+    // list changed, active planet changed) as this function itself.
+    renderDashboardPlanetSwitcher();
     const container = document.getElementById('planet-switcher');
     if (!container) return;
     if (myPlanets.length <= 1) {
@@ -4550,6 +4582,41 @@
       });
     });
     updateStickyOffsets();
+  }
+
+  // 總覽's own compact planet-pill row (see the HTML comment above
+  // #dashboard-planet-switcher) — mirrors renderPlanetSwitcher()'s own
+  // pill-building logic above (same home-mark/nickname rules, same
+  // single-planet gate) so it looks and behaves identically, just placed
+  // inline inside 總覽 instead of as a sticky per-planet-page bar. The one
+  // real difference is the click handler: 總覽 has no "current planet" of
+  // its own to merely switch while staying put — jumping anywhere from here
+  // means LEAVING 總覽 first, exactly like a `.dash-goto-btn`「前往」click
+  // does (see renderDashboardOverview()'s own goto-button listener).
+  function renderDashboardPlanetSwitcher() {
+    const container = document.getElementById('dashboard-planet-switcher');
+    if (!container) return;
+    if (myPlanets.length <= 1) {
+      container.classList.add('hidden');
+      container.innerHTML = '';
+      return;
+    }
+    container.classList.remove('hidden');
+    container.innerHTML = myPlanets.map((p, i) => {
+      const isActive = planet && String(p.id) === String(planet.id);
+      const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
+      const label = p.nickname ? p.nickname : `座標 ${p.coord}`;
+      return `<button class="planet-tab${isActive ? ' active' : ''}" data-planet-id="${p.id}" type="button" title="座標 ${p.coord}">${homeMark}${label}</button>`;
+    }).join('');
+    container.querySelectorAll('button[data-planet-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = myPlanets.find(p => String(p.id) === btn.dataset.planetId);
+        if (target) {
+          exitDashboardView();
+          switchToPlanet(target);
+        }
+      });
+    });
   }
 
   // 星球命名 (planet nicknames) — per explicit user request, alongside the
