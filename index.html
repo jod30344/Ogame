@@ -893,12 +893,11 @@
     align-items: center;
     gap: 10px;
   }
-  /* 運輸/移防 merged tab strip — see the HTML comment above #dispatch-section
-     for the merge itself. A plain two-button segmented control, same visual
-     language as `.planet-tab` (active = green border + tinted background)
-     so it reads as "one more tab-like control" rather than a brand new
-     widget. `.dispatch-panel` toggles via the existing global `.hidden`
-     utility class — see selectDispatchTab(). */
+  /* 攻擊/運輸/移防 merged tab strip — see the HTML comment above
+     #dispatch-section for the merge itself. A plain segmented control, same
+     visual language as `.planet-tab` (active = green border + tinted
+     background) so it reads as "one more tab-like control" rather than a
+     brand new widget. */
   .dispatch-tabs { display: flex; gap: 8px; margin: 10px 0 18px; }
   .dispatch-tab-btn {
     flex: 1;
@@ -915,6 +914,19 @@
   }
   .dispatch-tab-btn:hover { border-color: var(--ok); }
   .dispatch-tab-btn.active { border-color: var(--ok); color: var(--text-main); background: #16281f; }
+  /* Per user request ("欄位可不可以固定大小,切換時介面不會忽大忽小") — all
+     three `.dispatch-panel`s are stacked in the SAME grid cell so the
+     container's height is always the max of all three, regardless of which
+     one is currently shown; switching tabs never grows/shrinks the card.
+     The inactive panels use `visibility:hidden` (not the usual `.hidden`
+     utility class, which is `display:none` and would remove them from this
+     height calculation entirely) — see selectDispatchTab(). A
+     visibility:hidden element is also automatically excluded from hit
+     testing/tab order by the browser, so the hidden forms underneath can't
+     be accidentally clicked or tabbed into. */
+  .dispatch-panels { display: grid; }
+  .dispatch-panel { grid-column: 1; grid-row: 1; min-width: 0; }
+  .dispatch-panel.dispatch-panel-inactive { visibility: hidden; }
   .attack-card input, .attack-card select {
     background: var(--bg-deep);
     border: 1px solid var(--line);
@@ -1773,13 +1785,15 @@
     <button class="section-nav-item hidden" data-nav-target="fleet-roster-section" type="button">艦隊</button>
     <button class="section-nav-item hidden" data-nav-target="explore-section" type="button">探索</button>
     <button class="section-nav-item hidden" data-nav-target="known-planets-section" type="button">已知星球</button>
-    <button class="section-nav-item hidden" data-nav-target="attack-section" type="button">攻擊</button>
-    <!-- Per user request ("運輸跟移防感覺可以整合起來,版面也不用那麼複雜") —
-         運輸/移防 used to be two separate nav pills/sections that happened to
-         share almost identical form layouts; merged into one pill pointing
-         at the combined #dispatch-section (see that section's own HTML
-         comment for the full merge design). -->
-    <button class="section-nav-item hidden" data-nav-target="dispatch-section" type="button">運輸/移防</button>
+    <!-- Per user request ("運輸跟移防感覺可以整合起來,版面也不用那麼複雜"),
+         later followed by "那攻擊可不可以也合併在一起" — 攻擊/運輸/移防 used
+         to be three separate nav pills/sections (攻擊 and 運輸 always shared
+         the identical unlock condition attackVisible; 移防 has its own,
+         redeployVisible) whose forms all had the same "pick a target +
+         fill ship/resource counts + one submit button" shape. All three
+         merged into one pill pointing at the combined #dispatch-section
+         (see that section's own HTML comment for the full merge design). -->
+    <button class="section-nav-item hidden" data-nav-target="dispatch-section" type="button">攻擊/運輸/移防</button>
     <button class="section-nav-item hidden" data-nav-target="ancient-weapons-section" type="button">古代兵器</button>
     <button class="section-nav-item hidden" data-nav-target="movement-log-section" type="button">艦隊動向</button>
     <button class="section-nav-item hidden" data-nav-target="battle-log-section" type="button">戰報</button>
@@ -2020,140 +2034,151 @@
     </div>
   </div>
 
-  <div id="attack-section" class="hidden">
-    <div class="section-label" style="margin-top:30px;">
-      <span>攻擊</span>
-    </div>
-    <div class="section-note">能用搶的就別用問的</div>
-    <div class="attack-card">
-      <div class="target-input target-placeholder" id="target-name-placeholder">尚未發現任何星球</div>
-      <select class="target-input hidden" id="target-name">
-        <option value="">尚未發現任何星球</option>
-      </select>
-      <input type="number" class="ship-input" id="attack-count" min="1" value="1" placeholder="艦數">
-      <button class="max-btn" id="attack-max-btn" type="button">全派</button>
-      <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Lives here (not inside
-           #confirm-modal — its body is set via .textContent, so a live
-           control can't sit inside it) and is read in onAttackClick() before
-           the confirm modal opens, then threaded through to executeAttack().
-           Hidden entirely until the player has crafted their first weapon —
-           see populateWeaponSelects()'s visibility toggle. -->
-      <div class="ship-input-group hidden" id="attack-weapon-group">
-        <label class="ship-input-label" for="attack-weapon-select">帶兵器</label>
-        <select class="target-input" id="attack-weapon-select">
-          <option value="">不攜帶</option>
-        </select>
-        <div class="ship-input-hint" id="attack-weapon-preview"></div>
-      </div>
-      <button class="attack-btn" id="attack-btn">發動攻擊</button>
-      <div class="attack-msg" id="attack-msg"></div>
-    </div>
-  </div>
+  <!-- 攻擊/運輸/移防 合併 - per user request ("運輸跟移防感覺可以整合起來,版面也
+       不用那麼複雜"), then a follow-up request to also fold 攻擊 into the same
+       card ("那攻擊可不可以也合併在一起"). All three used to be separate
+       sections/nav pills whose forms shared the same basic shape (pick a
+       target/destination + fill ship/resource counts + one submit button):
+       攻擊(對已知的其他玩家或 NPC 星球發動攻擊)、運輸(送資源給「其他玩家」已
+       知的星球,需要對方同意才會真的送達)、移防(在「自己」的殖民地之間調度
+       艦隊含殖民母艦與資源,不需同意,只受目的地星球自己的艦隊上限限制,見
+       fetchDestinationFleetStatus())。合併方案:三個分頁各自的 DOM/id/送出
+       邏輯完全保留不動(見 #attack-card 內容 / #transport-card / #redeploy-card,
+       原本各自的 event listener 一行都沒改),只是外層包進同一個
+       #dispatch-section,上面加一排分頁鈕在「攻擊」/「我的殖民地(移防)」/
+       「其他玩家星球(運輸)」間切換,三邊各自的遊戲規則完全沒有被混在一起,
+       只是不用同時看到三份長相相似的表單而已。分頁的顯示/預設選取邏輯見
+       updateActionSectionVisibility() 與 selectDispatchTab()。
 
-  <!-- 運輸/移防 合併 - per user request ("運輸跟移防感覺可以整合起來,版面也
-       不用那麼複雜"). 運輸(送資源給「其他玩家」已知的星球,需要對方同意才會
-       真的送達)跟移防(在「自己」的殖民地之間調度艦隊含殖民母艦與資源,不需
-       同意,只受目的地星球自己的艦隊上限限制,見 fetchDestinationFleetStatus())
-       本來是兩個完全不同的機制/兩個獨立分頁 -- 只是表單版面長得幾乎一樣(都是
-       「選目的地 + 填艦艇/資源數量 + 一個送出按鈕」),兩個分頁疊在一起讓畫面
-       顯得很長很重複。合併方案:兩個分頁的 DOM/id/送出邏輯完全保留不動(見
-       #transport-card / #redeploy-card,原本各自的 event listener 一行都沒
-       改),只是外層包進同一個 #dispatch-section,上面加一排分頁鈕在「我的
-       殖民地(移防)」/「其他玩家星球(運輸)」間切換 -- 同一時間只顯示一邊的
-       表單,版面直接減半,兩邊各自的遊戲規則(要不要對方同意、能帶哪些艦種)
-       也完全沒有被混在一起,只是不用同時看到兩份幾乎一樣的表單而已。分頁的
-       顯示/預設選取邏輯見 updateActionSectionVisibility() 與
-       selectDispatchTab()。 -->
+       固定高度(per user request: "欄位可不可以固定大小,切換時介面不會忽大
+       忽小"): `.dispatch-panels` 是一個 CSS Grid 容器,三個 `.dispatch-panel`
+       都疊在同一個 grid cell(grid-row:1 / grid-column:1)—— 不管哪一個分頁是
+       目前顯示的,三個分頁的實際內容仍然都算進這個 grid row 的高度計算裡,所以
+       容器高度永遠等於「三個分頁裡最高的那個」,切換分頁時容器高度不會變。
+       未顯示的分頁用 `.dispatch-panel-inactive`(visibility:hidden,不是
+       display:none)隱藏 —— 用 visibility 而非 display 才能讓它繼續佔用版面空
+       間、繼續貢獻高度計算,同時 visibility:hidden 的元素本來就不會接收點擊
+       (瀏覽器內建行為),所以底下藏著的表單不會被誤觸。 -->
   <div id="dispatch-section" class="hidden">
     <div class="section-label" style="margin-top:30px;">
-      <span>運輸 / 移防</span>
+      <span>攻擊 / 運輸 / 移防</span>
     </div>
     <div class="dispatch-tabs" id="dispatch-tabs">
+      <button class="dispatch-tab-btn" data-dispatch-tab="attack" type="button">攻擊</button>
       <button class="dispatch-tab-btn" data-dispatch-tab="redeploy" type="button">我的殖民地(移防)</button>
       <button class="dispatch-tab-btn" data-dispatch-tab="transport" type="button">其他玩家星球(運輸)</button>
     </div>
 
-    <div class="dispatch-panel" id="dispatch-panel-redeploy">
-      <div class="section-note">在自己的殖民地之間調度艦隊與資源,派遣前會檢查目的地的艦隊上限</div>
-      <div class="attack-card" id="redeploy-card">
-        <div class="redeploy-target-row">
-          <div class="target-input target-placeholder" id="redeploy-target-placeholder">尚無其他殖民地</div>
-          <select class="target-input hidden" id="redeploy-target-planet">
-            <option value="">請選擇目的地</option>
+    <div class="dispatch-panels">
+      <div class="dispatch-panel" id="dispatch-panel-attack">
+        <div class="section-note">能用搶的就別用問的</div>
+        <div class="attack-card">
+          <div class="target-input target-placeholder" id="target-name-placeholder">尚未發現任何星球</div>
+          <select class="target-input hidden" id="target-name">
+            <option value="">尚未發現任何星球</option>
           </select>
+          <input type="number" class="ship-input" id="attack-count" min="1" value="1" placeholder="艦數">
+          <button class="max-btn" id="attack-max-btn" type="button">全派</button>
+          <!-- 帶兵器 — 古代兵器 (Ancient Weapons). Lives here (not inside
+               #confirm-modal — its body is set via .textContent, so a live
+               control can't sit inside it) and is read in onAttackClick() before
+               the confirm modal opens, then threaded through to executeAttack().
+               Hidden entirely until the player has crafted their first weapon —
+               see populateWeaponSelects()'s visibility toggle. -->
+          <div class="ship-input-group hidden" id="attack-weapon-group">
+            <label class="ship-input-label" for="attack-weapon-select">帶兵器</label>
+            <select class="target-input" id="attack-weapon-select">
+              <option value="">不攜帶</option>
+            </select>
+            <div class="ship-input-hint" id="attack-weapon-preview"></div>
+          </div>
+          <button class="attack-btn" id="attack-btn">發動攻擊</button>
+          <div class="attack-msg" id="attack-msg"></div>
         </div>
-        <div class="redeploy-form-grid">
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-mothership">殖民母艦</label>
-            <input type="number" class="ship-input" id="redeploy-mothership" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-scout">偵察機</label>
-            <input type="number" class="ship-input" id="redeploy-scout" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-fighter">戰鬥機</label>
-            <input type="number" class="ship-input" id="redeploy-fighter" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-transport">運輸艦</label>
-            <input type="number" class="ship-input" id="redeploy-transport" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-metal">攜帶金屬</label>
-            <input type="number" class="ship-input" id="redeploy-metal" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-crystal">攜帶晶體</label>
-            <input type="number" class="ship-input" id="redeploy-crystal" min="0" value="0">
-          </div>
-          <div class="ship-input-group">
-            <label class="ship-input-label" for="redeploy-food">攜帶糧食</label>
-            <input type="number" class="ship-input" id="redeploy-food" min="0" value="0">
-          </div>
-        </div>
-        <div class="colonize-cargo-note" id="redeploy-cargo-note"></div>
-        <!-- 帶兵器 - 古代兵器 (Ancient Weapons). Only weapons at status='home'
-             are listed (search renderWeaponSelect()); the preview line updates
-             live as the selection changes (search updateRedeployWeaponPreview()).
-             Hidden entirely until the player has crafted their first weapon -
-             search populateWeaponSelects()'s visibility toggle. -->
-        <div class="ship-input-group hidden" id="redeploy-weapon-group">
-          <label class="ship-input-label" for="redeploy-weapon-select">帶兵器</label>
-          <select class="target-input" id="redeploy-weapon-select">
-            <option value="">不攜帶</option>
-          </select>
-          <div class="ship-input-hint" id="redeploy-weapon-preview"></div>
-        </div>
-        <button class="upgrade" id="redeploy-launch-btn" type="button">派遣移防</button>
-        <div class="attack-msg" id="redeploy-msg"></div>
       </div>
-    </div>
 
-    <div class="dispatch-panel" id="dispatch-panel-transport">
-      <div class="section-note">當然也可以坐下來好好談談</div>
-      <div class="attack-card" id="transport-card">
-        <div class="target-input target-placeholder" id="transport-target-name-placeholder">尚未發現任何星球</div>
-        <select class="target-input hidden" id="transport-target-name">
-          <option value="">尚未發現任何星球</option>
-        </select>
-        <div class="ship-input-group">
-          <label class="ship-input-label" for="transport-ship-count">運輸艦數量</label>
-          <input type="number" class="ship-input" id="transport-ship-count" min="1" value="1">
+      <div class="dispatch-panel" id="dispatch-panel-redeploy">
+        <div class="section-note">在自己的殖民地之間調度艦隊與資源,派遣前會檢查目的地的艦隊上限</div>
+        <div class="attack-card" id="redeploy-card">
+          <div class="redeploy-target-row">
+            <div class="target-input target-placeholder" id="redeploy-target-placeholder">尚無其他殖民地</div>
+            <select class="target-input hidden" id="redeploy-target-planet">
+              <option value="">請選擇目的地</option>
+            </select>
+          </div>
+          <div class="redeploy-form-grid">
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-mothership">殖民母艦</label>
+              <input type="number" class="ship-input" id="redeploy-mothership" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-scout">偵察機</label>
+              <input type="number" class="ship-input" id="redeploy-scout" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-fighter">戰鬥機</label>
+              <input type="number" class="ship-input" id="redeploy-fighter" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-transport">運輸艦</label>
+              <input type="number" class="ship-input" id="redeploy-transport" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-metal">攜帶金屬</label>
+              <input type="number" class="ship-input" id="redeploy-metal" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-crystal">攜帶晶體</label>
+              <input type="number" class="ship-input" id="redeploy-crystal" min="0" value="0">
+            </div>
+            <div class="ship-input-group">
+              <label class="ship-input-label" for="redeploy-food">攜帶糧食</label>
+              <input type="number" class="ship-input" id="redeploy-food" min="0" value="0">
+            </div>
+          </div>
+          <div class="colonize-cargo-note" id="redeploy-cargo-note"></div>
+          <!-- 帶兵器 - 古代兵器 (Ancient Weapons). Only weapons at status='home'
+               are listed (search renderWeaponSelect()); the preview line updates
+               live as the selection changes (search updateRedeployWeaponPreview()).
+               Hidden entirely until the player has crafted their first weapon -
+               search populateWeaponSelects()'s visibility toggle. -->
+          <div class="ship-input-group hidden" id="redeploy-weapon-group">
+            <label class="ship-input-label" for="redeploy-weapon-select">帶兵器</label>
+            <select class="target-input" id="redeploy-weapon-select">
+              <option value="">不攜帶</option>
+            </select>
+            <div class="ship-input-hint" id="redeploy-weapon-preview"></div>
+          </div>
+          <button class="upgrade" id="redeploy-launch-btn" type="button">派遣移防</button>
+          <div class="attack-msg" id="redeploy-msg"></div>
         </div>
-        <div class="ship-input-group">
-          <label class="ship-input-label" for="transport-metal">攜帶金屬</label>
-          <input type="number" class="ship-input" id="transport-metal" min="0" value="0">
-        </div>
-        <div class="ship-input-group">
-          <label class="ship-input-label" for="transport-crystal">攜帶晶體</label>
-          <input type="number" class="ship-input" id="transport-crystal" min="0" value="0">
-        </div>
-        <button class="upgrade" id="transport-request-btn" type="button">請求運輸</button>
-        <div class="attack-msg" id="transport-msg"></div>
       </div>
-      <div id="transport-pending-incoming"></div>
-      <div id="transport-pending-outgoing"></div>
+
+      <div class="dispatch-panel" id="dispatch-panel-transport">
+        <div class="section-note">當然也可以坐下來好好談談</div>
+        <div class="attack-card" id="transport-card">
+          <div class="target-input target-placeholder" id="transport-target-name-placeholder">尚未發現任何星球</div>
+          <select class="target-input hidden" id="transport-target-name">
+            <option value="">尚未發現任何星球</option>
+          </select>
+          <div class="ship-input-group">
+            <label class="ship-input-label" for="transport-ship-count">運輸艦數量</label>
+            <input type="number" class="ship-input" id="transport-ship-count" min="1" value="1">
+          </div>
+          <div class="ship-input-group">
+            <label class="ship-input-label" for="transport-metal">攜帶金屬</label>
+            <input type="number" class="ship-input" id="transport-metal" min="0" value="0">
+          </div>
+          <div class="ship-input-group">
+            <label class="ship-input-label" for="transport-crystal">攜帶晶體</label>
+            <input type="number" class="ship-input" id="transport-crystal" min="0" value="0">
+          </div>
+          <button class="upgrade" id="transport-request-btn" type="button">請求運輸</button>
+          <div class="attack-msg" id="transport-msg"></div>
+        </div>
+        <div id="transport-pending-incoming"></div>
+        <div id="transport-pending-outgoing"></div>
+      </div>
     </div>
   </div>
 
@@ -2866,22 +2891,27 @@
       justLoggedIn = false;
       if (dashboardVisible) enterDashboardView();
     }
-    document.getElementById('attack-section')?.classList.toggle('hidden', !attackVisible);
-    // 運輸/移防 merged section (see #dispatch-section's own HTML comment) —
-    // the SECTION itself unlocks the moment EITHER mode's own prerequisite
-    // is met (a player might have 2+ colonies but no known planet yet, or
-    // vice versa), while each individual TAB BUTTON stays gated on its own
-    // condition so a not-yet-unlocked mode's tab doesn't even show. If the
-    // currently active tab isn't one of the available ones (including the
-    // very first render, before the player has ever clicked a tab), fall
-    // back to whichever tab IS available rather than showing a locked one.
+    // 攻擊/運輸/移防 merged section (see #dispatch-section's own HTML
+    // comment) — the SECTION itself unlocks the moment ANY of the three
+    // modes' own prerequisite is met (a player might have 2+ colonies but
+    // no known planet yet, or vice versa), while each individual TAB
+    // BUTTON stays gated on its own condition so a not-yet-unlocked mode's
+    // tab doesn't even show. 攻擊 and 運輸 have always shared the exact same
+    // prerequisite (attackVisible = fleetTechUnlocked() && known — the same
+    // gate the old separate #attack-section/#transport-section both used),
+    // so they're always both available or both unavailable together; 移防
+    // has its own independent one (redeployVisible). If the currently
+    // active tab isn't one of the available ones (including the very first
+    // render, before the player has ever clicked a tab), fall back to
+    // whichever tab IS available rather than showing a locked one.
     const dispatchVisible = attackVisible || redeployVisible;
     document.getElementById('dispatch-section')?.classList.toggle('hidden', !dispatchVisible);
+    document.querySelector('.dispatch-tab-btn[data-dispatch-tab="attack"]')?.classList.toggle('hidden', !attackVisible);
     document.querySelector('.dispatch-tab-btn[data-dispatch-tab="redeploy"]')?.classList.toggle('hidden', !redeployVisible);
     document.querySelector('.dispatch-tab-btn[data-dispatch-tab="transport"]')?.classList.toggle('hidden', !attackVisible);
     if (dispatchVisible) {
-      const activeTabAvailable = (activeDispatchTab === 'redeploy' && redeployVisible) || (activeDispatchTab === 'transport' && attackVisible);
-      selectDispatchTab(activeTabAvailable ? activeDispatchTab : (redeployVisible ? 'redeploy' : 'transport'));
+      const activeTabAvailable = (activeDispatchTab === 'redeploy' && redeployVisible) || (activeDispatchTab === 'attack' && attackVisible) || (activeDispatchTab === 'transport' && attackVisible);
+      selectDispatchTab(activeTabAvailable ? activeDispatchTab : (redeployVisible ? 'redeploy' : 'attack'));
     }
     document.getElementById('movement-log-section')?.classList.toggle('hidden', !movementLogVisible);
     document.getElementById('battle-log-section')?.classList.toggle('hidden', !intelSectionsVisible);
@@ -8220,21 +8250,27 @@
   }
 
   // ============================================================
-  // 運輸/移防 merged tab strip — see the big HTML comment above
-  // #dispatch-section for why these two got merged into one section. Purely
-  // a display toggle: which `.dispatch-panel` is hidden and which
-  // `.dispatch-tab-btn` carries `.active`. Neither #transport-card's nor
-  // #redeploy-card's own submit logic below needed to change at all — they
-  // still read/write the exact same element ids they always did.
+  // 攻擊/運輸/移防 merged tab strip — see the big HTML comment above
+  // #dispatch-section for why these three got merged into one section.
+  // Purely a display toggle: which `.dispatch-panel` is inactive and which
+  // `.dispatch-tab-btn` carries `.active`. Neither #attack-card's,
+  // #transport-card's, nor #redeploy-card's own submit logic below needed
+  // to change at all — they still read/write the exact same element ids
+  // they always did. Uses `.dispatch-panel-inactive` (visibility:hidden),
+  // NOT the generic `.hidden` (display:none) utility class — see that
+  // class's own CSS comment for why: display:none would pull an inactive
+  // panel out of the `.dispatch-panels` grid's height calculation, defeating
+  // the whole "fixed size, no resize on tab switch" point of that grid.
   // ============================================================
-  let activeDispatchTab = 'redeploy'; // 移防 shown first by default when both are unlocked
+  let activeDispatchTab = 'redeploy'; // 移防 shown first by default when all are unlocked
   function selectDispatchTab(tab) {
     activeDispatchTab = tab;
     document.querySelectorAll('.dispatch-tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.dispatchTab === tab);
     });
-    document.getElementById('dispatch-panel-redeploy')?.classList.toggle('hidden', tab !== 'redeploy');
-    document.getElementById('dispatch-panel-transport')?.classList.toggle('hidden', tab !== 'transport');
+    document.getElementById('dispatch-panel-attack')?.classList.toggle('dispatch-panel-inactive', tab !== 'attack');
+    document.getElementById('dispatch-panel-redeploy')?.classList.toggle('dispatch-panel-inactive', tab !== 'redeploy');
+    document.getElementById('dispatch-panel-transport')?.classList.toggle('dispatch-panel-inactive', tab !== 'transport');
   }
   document.querySelectorAll('.dispatch-tab-btn[data-dispatch-tab]').forEach(btn => {
     btn.addEventListener('click', () => selectDispatchTab(btn.dataset.dispatchTab));
@@ -10859,7 +10895,11 @@
     container.querySelectorAll('button[data-invade-to]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.getElementById('target-name').value = btn.dataset.invadeTo;
-        const section = document.getElementById('attack-section');
+        // 攻擊/運輸/移防 merged into one #dispatch-section (see its own HTML
+        // comment) — jumping here now also needs to select the 攻擊 tab, or
+        // the pre-filled target would land on a hidden `.dispatch-panel`.
+        selectDispatchTab('attack');
+        const section = document.getElementById('dispatch-section');
         if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
         document.getElementById('target-name').focus();
       });
