@@ -1795,8 +1795,11 @@
          (see that section's own HTML comment for the full merge design). -->
     <button class="section-nav-item hidden" data-nav-target="dispatch-section" type="button">攻擊/運輸/移防</button>
     <button class="section-nav-item hidden" data-nav-target="ancient-weapons-section" type="button">古代兵器</button>
-    <button class="section-nav-item hidden" data-nav-target="movement-log-section" type="button">艦隊動向</button>
-    <button class="section-nav-item hidden" data-nav-target="battle-log-section" type="button">戰報</button>
+    <!-- Per user request ("我想把艦隊動向跟戰報這類情報類的欄位融入到總覽
+         裡面,讓畫面更精簡") — both used to be their own nav pills/pages;
+         folded directly into the bottom of #dashboard-section itself (see
+         that section's own HTML comment) as always-shown full lists, so
+         they no longer need pills of their own here at all. -->
   </div>
 
   <div class="planet-switcher hidden" id="planet-switcher"></div>
@@ -1923,6 +1926,57 @@
     <div class="dashboard-grand-totals" id="dashboard-grand-totals"></div>
     <div class="dashboard-alerts" id="dashboard-alerts"></div>
     <div class="dashboard-planets" id="dashboard-planets"></div>
+
+    <!-- Per user request ("我想把艦隊動向跟戰報這類情報類的欄位融入到總覽
+         裡面,讓畫面更精簡") — both used to be their own top-level nav
+         pills/pages (#movement-log-section / #battle-log-section, now
+         removed entirely). Picked via AskUserQuestion: always show the
+         FULL list here at the bottom of 總覽 itself, not a collapsed
+         summary — so both need to become genuinely ACCOUNT-WIDE (across
+         every colony), not just whatever colony happens to be the
+         currently-active one behind the scenes:
+
+         戰報 (#battle-log, id unchanged) needed NO logic changes at all —
+         loadBattleLog() already queries `battles` by the player's NAME,
+         not by planet id (a battle always resolves against a player's
+         single home planet — see executeAttack()'s own comment — so
+         there was never a per-colony scope to begin with). Simply
+         re-parenting this exact element (same id, same render function)
+         from the old standalone section into here was enough.
+
+         艦隊動向 (#dashboard-movement-log) is genuinely new — the old
+         #movement-log only ever showed the CURRENTLY VIEWED colony's own
+         missions (colonizationRows/redeployRows are both scoped to
+         `origin_planet_id=eq.${planet.id}`), which would have been
+         actively wrong/confusing sitting inside an account-wide page —
+         switching colonies would silently change what 總覽 shows. See
+         renderDashboardMovementLog() for the account-wide aggregation
+         (reuses the already account-wide `cachedMissions` global as-is
+         for 攻擊/運輸 entries — loadFleetMovements() already queries by
+         player name too — and a newly-enriched, ALSO account-wide
+         `colonizeRows`/`redeployRows` from loadDashboardOverview()'s own
+         `in.(...)` queries for 殖民/移防 entries, each entry now prefixed
+         with the relevant colony's own name/coord for context). Recall
+         buttons here reuse the exact same recallColonizationMission() /
+         recallRedeployMission() / recallAttackMission() functions the old
+         per-planet page used — see applyRecall()'s own comment for a real
+         bug this surfaced (its food refund used to silently assume the
+         mission being recalled always belonged to whichever colony was
+         currently active, which stopped being true the moment a
+         different colony's mission could be recalled from here). -->
+    <div id="dashboard-movement-log-section">
+      <div class="section-label" style="margin-top:30px;">艦隊動向</div>
+      <div class="movement-log" id="dashboard-movement-log">
+        <div class="battle-empty">目前沒有艦隊在途中</div>
+      </div>
+    </div>
+
+    <div id="dashboard-battle-log-section">
+      <div class="section-label" style="margin-top:30px;">戰報</div>
+      <div class="battle-log" id="battle-log">
+        <div class="battle-empty">尚無戰鬥紀錄</div>
+      </div>
+    </div>
   </div>
 
   <!-- REVISION (user feedback after viewing 總覽 live on their own large,
@@ -2188,20 +2242,6 @@
     </div>
     <div class="section-note">擊敗遺跡星球可獲得對應兵器的圖紙資格,再透過神殿打造——兵器可攜帶出征,但只有專精的任務類型才會發揮特殊效果</div>
     <div class="plots-grid" id="ancient-weapons-grid"></div>
-  </div>
-
-  <div id="movement-log-section" class="hidden">
-    <div class="section-label" style="margin-top:30px;">艦隊動向</div>
-    <div class="movement-log" id="movement-log">
-      <div class="battle-empty">目前沒有艦隊在途中</div>
-    </div>
-  </div>
-
-  <div id="battle-log-section" class="hidden">
-    <div class="section-label" style="margin-top:30px;">戰報</div>
-    <div class="battle-log" id="battle-log">
-      <div class="battle-empty">尚無戰鬥紀錄</div>
-    </div>
   </div>
 
   </div>
@@ -2843,13 +2883,19 @@
     // way switching planets via planet-switcher is. Its only real
     // prerequisite is having more than one colony to move a fleet between.
     const redeployVisible = myPlanets.length > 1;
-    // 艦隊動向 also needs to stay visible whenever 移防 is (even for a
-    // brand-new second colony with no 戰情中心 anywhere yet) — otherwise a
-    // player who just founded their second colony would have no way to see
-    // or recall an in-flight 移防 mission until they separately unlock
-    // intel. 移防 itself is account-internal and was deliberately NOT gated
-    // on intel above, so the log that shows it shouldn't be either.
-    const movementLogVisible = intelSectionsVisible || redeployVisible;
+    // KNOWN SIMPLIFICATION (艦隊動向融入總覽): 艦隊動向 used to have its own
+    // standalone section, visible whenever EITHER intelSectionsVisible OR
+    // redeployVisible was true — so a player with 2+ colonies but no
+    // 戰情中心 anywhere could still see/recall in-flight 移防 missions. Now
+    // that 艦隊動向 lives inside #dashboard-section (see
+    // #dashboard-movement-log-section's own HTML comment), its visibility
+    // is simply whatever 總覽 itself uses (hasIntelCenterAnywhere() alone,
+    // no redeployVisible fallback) — so that narrow case temporarily
+    // loses movement-log visibility until an intel center is built
+    // anywhere. Accepted as a minor, narrow tradeoff for the simpler
+    // merged screen; not raised as a question since it doesn't block
+    // anything, only delays visibility of one info panel for a player who
+    // hasn't built intel yet (documented in game-status.md).
     // 古代兵器 crafting UI — gated on the building's actual PRESENCE on this
     // planet (hasUniqueBuildingClaimed('temple'), same per-planet scope that
     // function already uses for intel_center/automation_institute — see its
@@ -2913,8 +2959,6 @@
       const activeTabAvailable = (activeDispatchTab === 'redeploy' && redeployVisible) || (activeDispatchTab === 'attack' && attackVisible) || (activeDispatchTab === 'transport' && attackVisible);
       selectDispatchTab(activeTabAvailable ? activeDispatchTab : (redeployVisible ? 'redeploy' : 'attack'));
     }
-    document.getElementById('movement-log-section')?.classList.toggle('hidden', !movementLogVisible);
-    document.getElementById('battle-log-section')?.classList.toggle('hidden', !intelSectionsVisible);
     document.getElementById('known-planets-section')?.classList.toggle('hidden', !intelSectionsVisible);
     document.getElementById('explore-section')?.classList.toggle('hidden', !exploreVisible);
     // Keep the 快速跳轉列 pills in sync — see updateSectionNavVisibility()'s own
@@ -4539,7 +4583,7 @@
     countdownInterval = setInterval(() => {
       renderPlots();
       renderFleetRoster();
-      renderMovementLog();
+      renderDashboardMovementLog();
     }, 1000);
   }
 
@@ -4622,7 +4666,6 @@
     updateExploreFoodEstimate();
     renderPlots();
     renderFleetRoster();
-    renderMovementLog();
     pollUpdates();
   }
 
@@ -5395,10 +5438,17 @@
       body: '「運輸」分頁可以向已知的其他玩家星球請求資源(需要對方同意),跟自己殖民地之間互相調度用的「移防」是不同機制,別搞混囉。' },
     { key: 'redeploy-section', title: '🔓 新功能解鎖:移防', check: () => myPlanets.length > 1,
       body: '你現在擁有兩顆以上的殖民地了!「移防」分頁可以在自己的殖民地之間調動艦隊與資源,總覽頁面也支援直接拖曳卡片來快速移防。' },
-    { key: 'movement-log', title: '🔓 新功能解鎖:艦隊動向', check: () => (hasIntelCenterAnywhere() && hasAnyKnownPlanet()) || myPlanets.length > 1,
-      body: '「艦隊動向」分頁會統整顯示所有進行中的任務(探索、攻擊、運輸、殖民、移防等),方便你一次掌握艦隊的即時狀態。' },
+    { key: 'movement-log', title: '🔓 新功能解鎖:艦隊動向', check: () => hasIntelCenterAnywhere() && hasAnyKnownPlanet(),
+      // 艦隊動向融入總覽後,這個分頁本身已經不存在了,它現在只會顯示在「總覽」
+      // 底部 —— 而總覽自己就是靠 hasIntelCenterAnywhere() 來決定要不要顯示
+      // (見上面 dashboard-section 那一列)。原本這裡的 check 還多 OR 了
+      // `myPlanets.length > 1`(呼應舊版 movementLogVisible 的邏輯),但那樣會
+      // 讓「有第二顆殖民地但沒蓋戰情中心」的玩家收到這則解鎖通知,實際上卻連
+      // 總覽都還看不到 —— 已對齊成與總覽相同的條件,避免通知內容和實際可見性
+      // 不一致。
+      body: '「艦隊動向」現在整合進「總覽」頁面底部,會統整顯示所有進行中的任務(探索、攻擊、運輸、殖民、移防等),方便你一次掌握艦隊的即時狀態。' },
     { key: 'battle-log', title: '🔓 新功能解鎖:戰報', check: () => hasIntelCenterAnywhere() && hasAnyKnownPlanet(),
-      body: '「戰報」分頁會記錄每一場戰鬥的詳細結果,包含雙方投入的艦隊與最終戰損。' },
+      body: '「戰報」現在整合進「總覽」頁面底部,會記錄每一場戰鬥的詳細結果,包含雙方投入的艦隊與最終戰損。' },
     { key: 'dashboard-section', title: '🔓 新功能解鎖:總覽', check: () => hasIntelCenterAnywhere(),
       body: '「總覽」是跨殖民地的總管理畫面,可以一次看到所有星球的資源、艦隊與任務狀態,不用再逐一切換星球查看。' },
     { key: 'automation-institute-building', title: '🔓 新功能解鎖:自動化研究院', check: () => automationTechUnlocked(),
@@ -5643,7 +5693,24 @@
   // Returns the applied plan + refund on success, or null if the claim-guard
   // PATCH found the row already resolved/changed by someone else (a genuine
   // race, e.g. it arrived a moment before the recall click landed).
-  async function applyRecall(table, mission, shipCounts) {
+  //
+  // BUG FIX (surfaced by 艦隊動向融入總覽 — see #dashboard-movement-log-section's
+  // own comment): the food refund below used to ALWAYS credit `localFood`
+  // (the currently-viewed planet's own cache) and save to `planet.id`,
+  // silently assuming a recalled mission always originated from whichever
+  // colony happened to be active. That was true before this round — the old
+  // per-planet 艦隊動向 page could only ever show/recall the CURRENT
+  // colony's own missions. It stopped being true the moment 總覽's
+  // account-wide list let a player recall ANY colony's mission from one
+  // place, regardless of which colony is currently active. `originPlanetId`
+  // is now required and explicit at every call site; the refund is only
+  // ever mirrored into the live `localFood`/`renderResources()` display when
+  // it happens to match the currently active planet — otherwise it's
+  // written straight to that colony's own row via a fresh fetch+PATCH, the
+  // same "resolve to the real origin, mirror into local state only if it
+  // matches" pattern resolveRecalledAttack()/refundColonizationFleetToOrigin()
+  // already use for the ship-count side of a recall.
+  async function applyRecall(table, mission, shipCounts, originPlanetId) {
     const plan = computeRecallPlan(mission.launch_time || mission.launched_at, mission.arrival_time);
     if (!plan) return null;
     const originalCost = missionFoodCost(shipCounts, plan.originalDurationSeconds);
@@ -5659,10 +5726,21 @@
     });
     if (!claimed || claimed.length === 0) return null;
     if (refund > 0) {
-      localFood += refund;
-      renderResources();
-      flashResource('food-value', 'success');
-      await saveToServer();
+      if (planet && String(planet.id) === String(originPlanetId)) {
+        localFood += refund;
+        renderResources();
+        flashResource('food-value', 'success');
+        await saveToServer();
+      } else {
+        const rows = await restRequest(`planets?id=eq.${originPlanetId}&select=food`);
+        const originPlanet = rows && rows[0];
+        if (originPlanet) {
+          await restRequest(`planets?id=eq.${originPlanetId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ food: originPlanet.food + refund }),
+          });
+        }
+      }
     }
     return { plan, refund };
   }
@@ -7599,11 +7677,16 @@
 
   // 中途召回一支已出發的攻擊艦隊 — see computeRecallPlan()'s comment for the
   // mirrored-travel-time model. Only meaningful for the attacker's own view
-  // of their OUTGOING mission (renderMovementLog() only ever renders this
-  // button on `isOutgoing` entries), and never fires for transport rows.
+  // of their OUTGOING mission (renderDashboardMovementLog() only ever
+  // renders this button on `isOutgoing` entries), and never fires for
+  // transport rows. Passes attacker_planet_id explicitly to applyRecall()
+  // now (see that function's own comment) — this mission may have been
+  // launched from a colony OTHER than whichever one is currently active,
+  // since 總覽's aggregated list (unlike the old per-planet page) can show
+  // and recall any colony's own missions from one place.
   async function recallAttackMission(mission) {
     const shipCounts = { fighter: mission.fighter_ships_sent || mission.ships_sent || 0 };
-    const result = await applyRecall('fleet_missions', mission, shipCounts);
+    const result = await applyRecall('fleet_missions', mission, shipCounts, mission.attacker_planet_id);
     if (!result) {
       showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
       return;
@@ -7612,6 +7695,11 @@
     const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
     showToast(`艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
     await loadFleetMovements();
+    // Recall can now be triggered from 總覽's own aggregated 艦隊動向 list
+    // (not just the current colony's own view) — refresh it immediately
+    // rather than waiting for the next ~8s poll. loadDashboardOverview()
+    // already no-ops safely if 總覽 isn't the active view.
+    await loadDashboardOverview();
   }
 
   // A recalled attack's counterpart to resolveOneMission()'s normal battle
@@ -8070,143 +8158,9 @@
         }
       });
       cachedMissions = newList;
-      renderMovementLog();
     } catch (err) {
       console.error('Fleet movements error:', err);
     }
-  }
-
-  function renderMovementLog() {
-    if (!planet) return;
-    const container = document.getElementById('movement-log');
-    if (cachedMissions.length === 0 && colonizationRows.length === 0 && redeployRows.length === 0) {
-      container.innerHTML = '<div class="battle-empty">目前沒有艦隊在途中</div>';
-      renderFleetOverview();
-      return;
-    }
-    // Colonization missions listed first — they're always outgoing from THIS
-    // planet (colonizationRows is scoped to origin_planet_id=eq.${planet.id},
-    // same pattern as explorationRows), so there's no incoming/outgoing split
-    // to handle the way fleet_missions needs.
-    const colonizeEntries = colonizationRows.map(m => {
-      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
-      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
-      const shipParts = [];
-      if (m.scout_ships_sent) shipParts.push(`偵察機 ${fmt(m.scout_ships_sent)}`);
-      if (m.fighter_ships_sent) shipParts.push(`戰鬥機 ${fmt(m.fighter_ships_sent)}`);
-      if (m.transport_ships_sent) shipParts.push(`運輸艦 ${fmt(m.transport_ships_sent)}`);
-      const shipsText = shipParts.length > 0 ? shipParts.join('、') : '輕裝(無艦隊)';
-      const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0)
-        ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體`
-        : '';
-      const label = `殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}${m.recalled ? '(已召回)' : ''}`;
-      const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
-      // Once a mission is past its recall cutoff (already "on the way back",
-      // per the mirrored-travel-time model), swap the button for a plain,
-      // non-interactive "返航中" label in the same slot rather than just
-      // leaving the space blank — per explicit user request. Already-recalled
-      // missions don't need this: their `(已召回)` note in the label above
-      // already communicates status, so no note is shown here for those.
-      const recallBtn = canRecall
-        ? `<button class="cancel-order-btn small" data-recall-colonize="${m.id}" type="button">召回艦隊</button>`
-        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
-      return `<div class="movement-entry colonize">
-        <div>${label}</div>
-        <div class="movement-right">
-          <div class="movement-eta">${etaText}</div>
-          ${recallBtn}
-        </div>
-      </div>`;
-    }).join('');
-
-    // 移防 missions listed next — also always outgoing from THIS planet
-    // (redeployRows is scoped to origin_planet_id=eq.${planet.id}, same
-    // pattern as colonizationRows just above), so no incoming/outgoing split
-    // needed here either.
-    const redeployEntries = redeployRows.map(m => {
-      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
-      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
-      const shipParts = [];
-      if (m.mothership_ships_sent) shipParts.push(`殖民母艦 ${fmt(m.mothership_ships_sent)}`);
-      if (m.scout_ships_sent) shipParts.push(`偵察機 ${fmt(m.scout_ships_sent)}`);
-      if (m.fighter_ships_sent) shipParts.push(`戰鬥機 ${fmt(m.fighter_ships_sent)}`);
-      if (m.transport_ships_sent) shipParts.push(`運輸艦 ${fmt(m.transport_ships_sent)}`);
-      const shipsText = shipParts.length > 0 ? shipParts.join('、') : '(無艦隊)';
-      const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0 || m.food_sent > 0)
-        ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體 · ${fmt(m.food_sent || 0)} 糧食`
-        : '';
-      const label = `移防艦隊(${shipsText})正飛往座標 ${m.destination_coord} 駐防${cargoText}${m.recalled ? '(已召回)' : ''}`;
-      const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
-      const recallBtn = canRecall
-        ? `<button class="cancel-order-btn small" data-recall-redeploy="${m.id}" type="button">召回艦隊</button>`
-        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
-      return `<div class="movement-entry redeploy">
-        <div>${label}</div>
-        <div class="movement-right">
-          <div class="movement-eta">${etaText}</div>
-          ${recallBtn}
-        </div>
-      </div>`;
-    }).join('');
-
-    const missionEntries = cachedMissions.map(m => {
-      const isOutgoing = m.attacker_name === planet.player_name;
-      const isTransport = m.mission_type === 'transport';
-      const count = isTransport ? m.transport_ships_sent : (m.fighter_ships_sent || m.ships_sent);
-      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
-      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
-      let label, cls;
-      if (isTransport) {
-        cls = isOutgoing ? 'transport-out' : 'transport-in';
-        label = isOutgoing
-          ? `你的運輸艦隊(${count} 艘)正送 ${fmt(m.cargo_metal)} 金屬 · ${fmt(m.cargo_crystal)} 晶體給 ${m.defender_name}`
-          : `${m.attacker_name} 的運輸艦隊(${count} 艘)正送 ${fmt(m.cargo_metal)} 金屬 · ${fmt(m.cargo_crystal)} 晶體過來`;
-      } else {
-        cls = isOutgoing ? 'outgoing' : 'incoming';
-        label = isOutgoing
-          ? `你的艦隊(${count} 艘)正飛往 ${m.defender_name}${m.recalled ? '(已召回)' : ''}`
-          : `${m.attacker_name} 的艦隊(${count} 艘)正逼近你的星球!`;
-      }
-      // Only the attacker's own view of their OUTGOING, non-transport
-      // mission ever gets a recall button — a defender has no fleet to call
-      // back here, and transport recall isn't in scope (see project notes).
-      const canRecall = isOutgoing && !isTransport && !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
-      // Same "返航中" placeholder treatment as colonization below — only for
-      // the slot a recall button would otherwise occupy (outgoing, non-
-      // transport, not already recalled), once past the recall cutoff.
-      const pastRecallCutoff = isOutgoing && !isTransport && !m.recalled && !computeRecallPlan(m.launch_time, m.arrival_time);
-      const recallBtn = canRecall
-        ? `<button class="cancel-order-btn small" data-recall-attack="${m.id}" type="button">召回艦隊</button>`
-        : (pastRecallCutoff ? `<span class="recall-status-note">返航中</span>` : '');
-      return `<div class="movement-entry ${cls}">
-        <div>${label}</div>
-        <div class="movement-right">
-          <div class="movement-eta">${etaText}</div>
-          ${recallBtn}
-        </div>
-      </div>`;
-    }).join('');
-
-    container.innerHTML = colonizeEntries + redeployEntries + missionEntries;
-    container.querySelectorAll('button[data-recall-colonize]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mission = colonizationRows.find(m => String(m.id) === String(btn.dataset.recallColonize));
-        if (mission) recallColonizationMission(mission);
-      });
-    });
-    container.querySelectorAll('button[data-recall-redeploy]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mission = redeployRows.find(m => String(m.id) === String(btn.dataset.recallRedeploy));
-        if (mission) recallRedeployMission(mission);
-      });
-    });
-    container.querySelectorAll('button[data-recall-attack]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mission = cachedMissions.find(m => String(m.id) === String(btn.dataset.recallAttack));
-        if (mission) recallAttackMission(mission);
-      });
-    });
-    renderFleetOverview();
   }
 
   // ============================================================
@@ -9654,8 +9608,14 @@
         // fleet is already at its cap (see fleetCapForHomesteadLevel()) before
         // nagging about an idle shipyard; previously this query only pulled
         // enough to render the "殖民中" line, not to count committed ships.
-        restRequest(`colonization_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,target_coord,arrival_time,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent&order=arrival_time.asc`),
-        restRequest(`redeploy_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=origin_planet_id,destination_planet_id,destination_coord,arrival_time,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent&order=arrival_time.asc`),
+        // id/launched_at/metal_sent/crystal_sent[/food_sent]/recalled added
+        // this round (previously omitted, since this query only fed the
+        // compact 在途任務 summary lines) — the new account-wide 艦隊動向 list
+        // inside 總覽 (renderDashboardMovementLog()) needs the full set to
+        // build the same detailed per-mission entries the old per-planet
+        // movement log used to show, including a working recall button.
+        restRequest(`colonization_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=id,origin_planet_id,target_coord,arrival_time,launched_at,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent,metal_sent,crystal_sent,recalled&order=arrival_time.asc`),
+        restRequest(`redeploy_missions?origin_planet_id=in.(${ids})&resolved=eq.false&select=id,origin_planet_id,destination_planet_id,destination_coord,arrival_time,launched_at,mothership_ships_sent,scout_ships_sent,fighter_ships_sent,transport_ships_sent,metal_sent,crystal_sent,food_sent,recalled&order=arrival_time.asc`),
         // approval_status=neq.pending: an un-approved outgoing transport
         // request hasn't actually launched yet (see pendingOutgoingTransports'
         // own comment) — it belongs in "awaiting a decision", not "in transit",
@@ -10048,6 +10008,175 @@
       btn.addEventListener('pointerdown', (e) => {
         const originPlanet = myPlanets.find(p => String(p.id) === String(btn.dataset.transportPlanet));
         if (originPlanet) startDashboardTransportDrag(e, originPlanet, btn);
+      });
+    });
+
+    // 艦隊動向融入總覽 (see #dashboard-movement-log-section's own HTML
+    // comment) — colonizeRows/redeployRows here are already the fresh,
+    // account-wide rows this same function just used for the per-card 在途
+    // 任務 summary lines above, now with the extra fields (id/launched_at/
+    // cargo/recalled) needed to also render the FULL detail list.
+    renderDashboardMovementLog(colonizeRows, redeployRows);
+  }
+
+  // ============================================================
+  // 總覽的艦隊動向 (account-wide) — see the big HTML comment above
+  // #dashboard-movement-log-section for the full context. Replaces the old
+  // per-planet renderMovementLog() (removed) — colonizeRows/redeployRows are
+  // account-wide (loadDashboardOverview()'s own `in.(...)` queries), and
+  // cachedMissions (attack/transport) already was account-wide even before
+  // this round, since loadFleetMovements() has always queried by the
+  // player's NAME, not by planet id.
+  //
+  // Cached at module scope (lastDashboardColonizeRows/lastDashboardRedeployRows)
+  // so the per-second countdown tick (see startGame()'s countdownInterval)
+  // can keep the ETA text ticking down between dashboard polls without an
+  // extra network round-trip — same "re-render from whatever was last
+  // fetched" pattern the old per-planet version already used.
+  // ============================================================
+  let lastDashboardColonizeRows = [];
+  let lastDashboardRedeployRows = [];
+  function renderDashboardMovementLog(colonizeRows, redeployRows) {
+    if (colonizeRows) lastDashboardColonizeRows = colonizeRows;
+    if (redeployRows) lastDashboardRedeployRows = redeployRows;
+    const container = document.getElementById('dashboard-movement-log');
+    if (!container) return;
+    const cRows = lastDashboardColonizeRows;
+    const rRows = lastDashboardRedeployRows;
+    if (cRows.length === 0 && rRows.length === 0 && cachedMissions.length === 0) {
+      container.innerHTML = '<div class="battle-empty">目前沒有艦隊在途中</div>';
+      return;
+    }
+    const planetNameById = {};
+    myPlanets.forEach(p => { planetNameById[p.id] = p.nickname ? p.nickname : `座標 ${p.coord}`; });
+
+    // 殖民艦隊 — always outgoing from one of the player's own colonies
+    // (origin_planet_id), heading to a not-yet-owned coordinate.
+    const colonizeEntries = cRows.map(m => {
+      const originName = planetNameById[m.origin_planet_id];
+      const originPrefix = originName ? `「${originName}」的` : '你的';
+      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
+      const shipParts = [];
+      if (m.scout_ships_sent) shipParts.push(`偵察機 ${fmt(m.scout_ships_sent)}`);
+      if (m.fighter_ships_sent) shipParts.push(`戰鬥機 ${fmt(m.fighter_ships_sent)}`);
+      if (m.transport_ships_sent) shipParts.push(`運輸艦 ${fmt(m.transport_ships_sent)}`);
+      const shipsText = shipParts.length > 0 ? shipParts.join('、') : '輕裝(無艦隊)';
+      const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0)
+        ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體`
+        : '';
+      const label = `${originPrefix}殖民艦隊(${shipsText})正飛往座標 ${m.target_coord}${cargoText}${m.recalled ? '(已召回)' : ''}`;
+      const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-colonize="${m.id}" type="button">召回艦隊</button>`
+        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
+      return `<div class="movement-entry colonize">
+        <div>${label}</div>
+        <div class="movement-right">
+          <div class="movement-eta">${etaText}</div>
+          ${recallBtn}
+        </div>
+      </div>`;
+    }).join('');
+
+    // 移防艦隊 — always own colony to own colony (origin AND destination are
+    // both in myPlanets), so both ends can be named.
+    const redeployEntries = rRows.map(m => {
+      const originName = planetNameById[m.origin_planet_id];
+      const originPrefix = originName ? `「${originName}」的` : '你的';
+      const destName = planetNameById[m.destination_planet_id];
+      const destText = destName ? `「${destName}」(座標 ${m.destination_coord})` : `座標 ${m.destination_coord}`;
+      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
+      const shipParts = [];
+      if (m.mothership_ships_sent) shipParts.push(`殖民母艦 ${fmt(m.mothership_ships_sent)}`);
+      if (m.scout_ships_sent) shipParts.push(`偵察機 ${fmt(m.scout_ships_sent)}`);
+      if (m.fighter_ships_sent) shipParts.push(`戰鬥機 ${fmt(m.fighter_ships_sent)}`);
+      if (m.transport_ships_sent) shipParts.push(`運輸艦 ${fmt(m.transport_ships_sent)}`);
+      const shipsText = shipParts.length > 0 ? shipParts.join('、') : '(無艦隊)';
+      const cargoText = (m.metal_sent > 0 || m.crystal_sent > 0 || m.food_sent > 0)
+        ? ` · 攜帶 ${fmt(m.metal_sent || 0)} 金屬 · ${fmt(m.crystal_sent || 0)} 晶體 · ${fmt(m.food_sent || 0)} 糧食`
+        : '';
+      const label = `${originPrefix}移防艦隊(${shipsText})正飛往${destText} 駐防${cargoText}${m.recalled ? '(已召回)' : ''}`;
+      const canRecall = !m.recalled && !!computeRecallPlan(m.launched_at, m.arrival_time);
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-redeploy="${m.id}" type="button">召回艦隊</button>`
+        : (m.recalled ? '' : `<span class="recall-status-note">返航中</span>`);
+      return `<div class="movement-entry redeploy">
+        <div>${label}</div>
+        <div class="movement-right">
+          <div class="movement-eta">${etaText}</div>
+          ${recallBtn}
+        </div>
+      </div>`;
+    }).join('');
+
+    // 攻擊/運輸 — cachedMissions was ALREADY account-wide before this round
+    // (loadFleetMovements() queries `or=(attacker_name.eq...,defender_name.eq...)`
+    // by the player's NAME, not a specific planet id), so no new query was
+    // needed here at all — just naming which colony is the origin/target.
+    const missionEntries = cachedMissions.map(m => {
+      const isOutgoing = !!planet && m.attacker_name === planet.player_name;
+      const isTransport = m.mission_type === 'transport';
+      const count = isTransport ? m.transport_ships_sent : (m.fighter_ships_sent || m.ships_sent);
+      const remainingSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
+      const etaText = remainingSec > 0 ? formatDuration(remainingSec) + ' 後抵達' : '即將結算';
+      let label, cls;
+      if (isOutgoing) {
+        const originName = planetNameById[m.attacker_planet_id];
+        const originPrefix = originName ? `「${originName}」的` : '你的';
+        if (isTransport) {
+          cls = 'transport-out';
+          label = `${originPrefix}運輸艦隊(${count} 艘)正送 ${fmt(m.cargo_metal)} 金屬 · ${fmt(m.cargo_crystal)} 晶體給 ${m.defender_name}`;
+        } else {
+          cls = 'outgoing';
+          label = `${originPrefix}艦隊(${count} 艘)正飛往 ${m.defender_name}${m.recalled ? '(已召回)' : ''}`;
+        }
+      } else {
+        const destName = planetNameById[m.defender_planet_id];
+        const destText = destName ? `「${destName}」` : '星球';
+        if (isTransport) {
+          cls = 'transport-in';
+          label = `${m.attacker_name} 的運輸艦隊(${count} 艘)正送 ${fmt(m.cargo_metal)} 金屬 · ${fmt(m.cargo_crystal)} 晶體給你的${destText}`;
+        } else {
+          cls = 'incoming';
+          label = `${m.attacker_name} 的艦隊(${count} 艘)正逼近你的${destText}!`;
+        }
+      }
+      // Only the attacker's own view of their OUTGOING, non-transport
+      // mission ever gets a recall button — a defender has no fleet to call
+      // back here, and transport recall isn't in scope (see project notes).
+      const canRecall = isOutgoing && !isTransport && !m.recalled && !!computeRecallPlan(m.launch_time, m.arrival_time);
+      const pastRecallCutoff = isOutgoing && !isTransport && !m.recalled && !computeRecallPlan(m.launch_time, m.arrival_time);
+      const recallBtn = canRecall
+        ? `<button class="cancel-order-btn small" data-recall-attack="${m.id}" type="button">召回艦隊</button>`
+        : (pastRecallCutoff ? `<span class="recall-status-note">返航中</span>` : '');
+      return `<div class="movement-entry ${cls}">
+        <div>${label}</div>
+        <div class="movement-right">
+          <div class="movement-eta">${etaText}</div>
+          ${recallBtn}
+        </div>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = colonizeEntries + redeployEntries + missionEntries;
+    container.querySelectorAll('button[data-recall-colonize]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = cRows.find(m => String(m.id) === String(btn.dataset.recallColonize));
+        if (mission) recallColonizationMission(mission);
+      });
+    });
+    container.querySelectorAll('button[data-recall-redeploy]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = rRows.find(m => String(m.id) === String(btn.dataset.recallRedeploy));
+        if (mission) recallRedeployMission(mission);
+      });
+    });
+    container.querySelectorAll('button[data-recall-attack]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = cachedMissions.find(m => String(m.id) === String(btn.dataset.recallAttack));
+        if (mission) recallAttackMission(mission);
       });
     });
   }
@@ -11373,7 +11502,6 @@
     try {
       const rows = await restRequest(`colonization_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&order=launched_at.asc`);
       colonizationRows = rows || [];
-      renderMovementLog();
     } catch (err) {
       console.error('Load colonization missions error:', err);
     }
@@ -11396,7 +11524,7 @@
       fighter: mission.fighter_ships_sent || 0,
       transport: mission.transport_ships_sent || 0,
     };
-    const result = await applyRecall('colonization_missions', mission, shipCounts);
+    const result = await applyRecall('colonization_missions', mission, shipCounts, mission.origin_planet_id);
     if (!result) {
       showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
       return;
@@ -11405,6 +11533,7 @@
     const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
     showToast(`殖民艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
     await loadColonizationMissions();
+    await loadDashboardOverview();
   }
 
   // A recalled colonization's counterpart to resolveOneColonization()'s
@@ -11654,7 +11783,6 @@
     try {
       const rows = await restRequest(`redeploy_missions?origin_planet_id=eq.${planet.id}&resolved=eq.false&order=launched_at.asc`);
       redeployRows = rows || [];
-      renderMovementLog();
     } catch (err) {
       console.error('Load redeploy missions error:', err);
     }
@@ -12041,7 +12169,7 @@
       fighter: mission.fighter_ships_sent || 0,
       transport: mission.transport_ships_sent || 0,
     };
-    const result = await applyRecall('redeploy_missions', mission, shipCounts);
+    const result = await applyRecall('redeploy_missions', mission, shipCounts, mission.origin_planet_id);
     if (!result) {
       showToast('召回失敗:已過折返點,或任務已經結算', 'danger');
       return;
@@ -12050,6 +12178,7 @@
     const refundNote = result.refund > 0 ? `,退還 ${result.refund} 糧食` : '';
     showToast(`移防艦隊已召回,預計 ${formatDuration(Math.max(0, remainingSec))} 後返航${refundNote}`, 'success', 8000);
     await loadRedeployMissions();
+    await loadDashboardOverview();
   }
 
   // Try to skip straight past the login screen if this device already has a
