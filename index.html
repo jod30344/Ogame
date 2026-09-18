@@ -1320,6 +1320,12 @@
   /* Drop-target glow while dragging a resource card from #resources-bar over
      this tab — same treatment 總覽's own drag-target-valid card glow uses. */
   .planet-tab.drag-target-valid { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(79, 209, 165, 0.35); }
+  /* REVISION: dashboard pills as a drag SOURCE too (see startDashboardPillDrag()
+     near renderDashboardOverview()). Scoped to #dashboard-planet-switcher only
+     -- the main per-planet #planet-switcher bar's pills stay plain
+     click-to-switch, so they keep the default cursor:pointer above. */
+  #dashboard-planet-switcher .planet-tab { cursor: grab; touch-action: none; }
+  #dashboard-planet-switcher .planet-tab.dragging { cursor: grabbing; opacity: 0.55; }
 
   /* 總覽's own planet pill row (see the HTML comment right above
      #dashboard-planet-switcher) — reuses `.planet-tab` for each pill so it
@@ -4726,10 +4732,21 @@
   // pill-building logic above (same home-mark/nickname rules, same
   // single-planet gate) so it looks and behaves identically, just placed
   // inline inside 總覽 instead of as a sticky per-planet-page bar. The one
-  // real difference is the click handler: 總覽 has no "current planet" of
-  // its own to merely switch while staying put — jumping anywhere from here
-  // means LEAVING 總覽 first, exactly like a `.dash-goto-btn`「前往」click
-  // does (see renderDashboardOverview()'s own goto-button listener).
+  // real difference (originally) was the click handler: 總覽 has no "current
+  // planet" of its own to merely switch while staying put — jumping anywhere
+  // from here means LEAVING 總覽 first, exactly like a .dash-goto-btn「前往」
+  // click does (see renderDashboardOverview()'s own goto-button listener).
+  //
+  // REVISION: per user follow-up request ("而且我覺得開的這一排殖民星球列也要
+  // 能支援『拖移調度』功能" — and this row of colony pills should also support
+  // a "drag-to-dispatch" feature), these pills are now ALSO a drag SOURCE,
+  // not just a click target — see startDashboardPillDrag() and the drag
+  // mechanism built around it, near renderDashboardOverview()'s own 調度-drag
+  // feature. The plain 'click' listener below was replaced by a pointerdown
+  // listener instead (same reasoning as that feature's own comment: deciding
+  // click-vs-drag from ONE pointerdown/up pair avoids a native 'click' event
+  // double-firing right after a below-threshold drag's own pointerup) — a
+  // quick tap still does exactly what the old click listener did.
   function renderDashboardPlanetSwitcher() {
     const container = document.getElementById('dashboard-planet-switcher');
     if (!container) return;
@@ -4746,12 +4763,9 @@
       return `<button class="planet-tab${isActive ? ' active' : ''}" data-planet-id="${p.id}" type="button" title="座標 ${p.coord}">${homeMark}${label}</button>`;
     }).join('');
     container.querySelectorAll('button[data-planet-id]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const target = myPlanets.find(p => String(p.id) === btn.dataset.planetId);
-        if (target) {
-          exitDashboardView();
-          switchToPlanet(target);
-        }
+      btn.addEventListener('pointerdown', (e) => {
+        const originPlanet = myPlanets.find(p => String(p.id) === btn.dataset.planetId);
+        if (originPlanet) startDashboardPillDrag(e, originPlanet, btn);
       });
     });
   }
@@ -9856,15 +9870,25 @@
                  button onto ANOTHER card opens an in-page 移防 quantity modal
                  with origin/destination already set. The mission this
                  actually creates is 移防 (fleet+cargo between the player's OWN
-                 colonies, no approval needed) — labeled 運輸 here since that's
-                 the verb the user used, not to be confused with the existing
-                 「運輸」 nav pill (a different mechanic: a resource request to
-                 ANOTHER player's known planet, which needs their approval and
-                 isn't reachable from this own-colony card grid at all).
+                 colonies, no approval needed).
+                 REVISION: per explicit follow-up user request ("我想把星球卡片
+                 上的「運輸」改成「調度」，更適切"), the visible label below was
+                 changed from 運輸 to 調度 — 調度 is the more accurate word here,
+                 since the old 運輸 label was too easily confused with the
+                 existing 「運輸」 nav pill (a different mechanic: a resource
+                 request to ANOTHER player's known planet, which needs their
+                 approval and isn't reachable from this own-colony card grid at
+                 all — that confusion is exactly what prompted this rename).
+                 Only the visible text changed — the class name
+                 (dash-transport-btn), the data attribute
+                 (data-transport-planet), and every JS function/variable name
+                 below are deliberately left as-is: they're internal, nothing a
+                 player ever sees, and renaming them would just make future
+                 diffs harder to follow for no visible benefit.
                  Only rendered with 2+ owned planets — same gate the 移防
                  pill itself uses (redeployVisible), since with only one
                  planet there is no other card to redeploy to or from. -->
-            ${myPlanets.length > 1 ? `<button class="dash-transport-btn" data-transport-planet="${p.id}" type="button">運輸</button>` : ''}
+            ${myPlanets.length > 1 ? `<button class="dash-transport-btn" data-transport-planet="${p.id}" type="button">調度</button>` : ''}
           </div>
         </div>
         <div class="dash-resource-row">
@@ -10192,12 +10216,14 @@
   //
   // The mission this actually creates is 移防 (redeploy fleet+cargo between
   // the player's OWN colonies, no approval needed — see the existing
-  // #dispatch-panel-redeploy) — the button is labeled 運輸 because that's the
-  // verb the user used, not because this reuses the separate, pre-existing
-  // "運輸" mechanic (a resource REQUEST to another player's known planet,
-  // gated on their approval — see #dispatch-panel-transport; both panels now
-  // live inside one merged #dispatch-section, see its own HTML comment).
-  // That mechanic isn't
+  // #dispatch-panel-redeploy) — the button was originally labeled 運輸 (the
+  // verb the user first used) but is now labeled 調度 per an explicit
+  // follow-up rename request ("我想把星球卡片上的「運輸」改成「調度」，更適切")
+  // — see the button's own HTML comment above for the full rationale. Either
+  // label, this is NOT the separate, pre-existing "運輸" mechanic (a resource
+  // REQUEST to another player's known planet, gated on their approval — see
+  // #dispatch-panel-transport; both panels now live inside one merged
+  // #dispatch-section, see its own HTML comment). That mechanic isn't
   // reachable from here at all: 總覽's card grid only ever lists the
   // player's OWN planets, so a drag between two of its cards can only ever
   // mean "move MY OWN fleet/cargo between MY OWN colonies," which is exactly
@@ -10587,6 +10613,127 @@
     }
 
     return { ok: true };
+  }
+
+  // ============================================================
+  // 拖曳調度 from 總覽's colony pill row (#dashboard-planet-switcher) — per
+  // user follow-up request, sent alongside the 運輸→調度 rename above:
+  // "而且我覺得開的這一排殖民星球列也要能支援『拖移調度』功能" (and: this row
+  // of colony pills should also support a "drag-to-dispatch" feature).
+  //
+  // Mirrors 總覽卡片's own 調度-button drag mechanism above almost exactly —
+  // same shared #dashboard-drag-overlay/#dashboard-drag-line, same
+  // DASHBOARD_DRAG_THRESHOLD_PX, same click-vs-drag decision made entirely
+  // inside pointerup instead of a separate 'click' listener (see that
+  // mechanism's own comment for why a native 'click' would double-fire) —
+  // just a different source element (a pill instead of the card's own 調度
+  // button) and a wider set of valid drop targets: dropping onto EITHER
+  // another pill in this same row OR onto any 總覽 card is accepted, since
+  // both are visible together on this page and both already expose the same
+  // `data-planet-id` attribute this code keys off of.
+  //
+  // Scoped specifically to #dashboard-planet-switcher, NOT the main
+  // per-planet #planet-switcher bar — that bar's own pills stay plain
+  // click-to-switch. #dashboard-planet-switcher is the row actually visible
+  // in 總覽 (the per-planet bar is hidden the whole time `dashboardViewActive`
+  // is true — see enterDashboardView()), and it's the exact row the user's
+  // own screenshot pointed at, so extending the other bar too would add a
+  // feature nobody asked for onto a bar you can't even see at the same time.
+  // ============================================================
+  let dashboardPillDragState = null; // set while a #dashboard-planet-switcher pill pointer is down
+
+  function startDashboardPillDrag(e, originPlanet, pill) {
+    if (e.button !== undefined && e.button !== 0) return; // primary button/touch only
+    dashboardPillDragState = {
+      originPlanet,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+      sourcePill: pill,
+      lastTargetEl: null,
+    };
+    try { pill.setPointerCapture(e.pointerId); } catch (err) { /* not critical if unsupported */ }
+    pill.addEventListener('pointermove', onDashboardPillPointerMove);
+    pill.addEventListener('pointerup', onDashboardPillPointerUp);
+    pill.addEventListener('pointercancel', onDashboardPillPointerCancel);
+  }
+
+  function onDashboardPillPointerMove(e) {
+    const state = dashboardPillDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (!state.dragging && Math.hypot(dx, dy) > DASHBOARD_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+      state.sourcePill.classList.add('dragging');
+      document.getElementById('dashboard-drag-overlay')?.classList.remove('hidden');
+    }
+    if (!state.dragging) return;
+    e.preventDefault();
+
+    const originRect = state.sourcePill.getBoundingClientRect();
+    const line = document.getElementById('dashboard-drag-line');
+    if (line) {
+      line.setAttribute('x1', originRect.left + originRect.width / 2);
+      line.setAttribute('y1', originRect.top + originRect.height / 2);
+      line.setAttribute('x2', e.clientX);
+      line.setAttribute('y2', e.clientY);
+    }
+
+    // Valid drop targets: another pill in this same row, OR any 總覽 card —
+    // both carry `data-planet-id`, so one lookup covers either.
+    const hoveredEl = document.elementFromPoint(e.clientX, e.clientY);
+    const hoveredTarget = hoveredEl ? hoveredEl.closest('.planet-tab[data-planet-id], .dash-planet-card[data-planet-id]') : null;
+    const isValidTarget = !!(hoveredTarget && hoveredTarget !== state.sourcePill && String(hoveredTarget.dataset.planetId) !== String(state.originPlanet.id));
+    if (state.lastTargetEl && state.lastTargetEl !== (isValidTarget ? hoveredTarget : null)) {
+      state.lastTargetEl.classList.remove('drag-target-valid');
+    }
+    if (isValidTarget) {
+      hoveredTarget.classList.add('drag-target-valid');
+      state.lastTargetEl = hoveredTarget;
+    } else {
+      state.lastTargetEl = null;
+    }
+  }
+
+  function cleanupDashboardPillDrag() {
+    const state = dashboardPillDragState;
+    if (!state) return;
+    state.sourcePill.removeEventListener('pointermove', onDashboardPillPointerMove);
+    state.sourcePill.removeEventListener('pointerup', onDashboardPillPointerUp);
+    state.sourcePill.removeEventListener('pointercancel', onDashboardPillPointerCancel);
+    state.sourcePill.classList.remove('dragging');
+    state.lastTargetEl?.classList.remove('drag-target-valid');
+    document.getElementById('dashboard-drag-overlay')?.classList.add('hidden');
+    dashboardPillDragState = null;
+  }
+
+  function onDashboardPillPointerCancel(e) {
+    const state = dashboardPillDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    cleanupDashboardPillDrag();
+  }
+
+  function onDashboardPillPointerUp(e) {
+    const state = dashboardPillDragState;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const wasDragging = state.dragging;
+    const targetEl = state.lastTargetEl;
+    const originPlanet = state.originPlanet;
+    cleanupDashboardPillDrag();
+
+    if (!wasDragging) {
+      // Reproduces exactly what renderDashboardPlanetSwitcher()'s old plain
+      // 'click' listener did: leave 總覽 and switch straight to that colony.
+      exitDashboardView();
+      switchToPlanet(originPlanet);
+      return;
+    }
+    if (!targetEl) return; // dropped somewhere that isn't a pill or card — no-op
+    const destPlanet = myPlanets.find(p => String(p.id) === String(targetEl.dataset.planetId));
+    if (!destPlanet) return;
+    openDashboardRedeployModal(originPlanet, destPlanet);
   }
 
   // ============================================================
