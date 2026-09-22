@@ -598,18 +598,28 @@
   .battle-intel-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; margin-bottom: 8px; }
   .battle-intel-label { color: var(--text-dim); }
   .battle-intel-value { font-family: 'Space Mono', monospace; color: var(--text-main); }
+  /* 偵察機不計入戰鬥判定(見 SHIP_TYPES.scout.statLine),只是列出來給玩家參考
+     手上還有哪些艦艇,所以刻意用比較淡的顏色跟主要的戰鬥機/砲塔數字區隔開。 */
+  .battle-intel-row.battle-intel-row-refonly .battle-intel-value { color: var(--text-dim); }
+  .battle-intel-row-refonly .battle-intel-label-note { font-size: 10px; opacity: 0.75; }
   .battle-intel-divider { border-top: 1px solid var(--line); margin: 10px 0 12px; }
-  .battle-intel-verdict {
-    margin-top: 14px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    font-weight: 600;
+  /* 改版:不再用一整條「你會獲勝/你會落敗」的斷言句,只用紅/綠的小徽章表示
+     預估優劣勢,實際數字改放進上面的戰力列表裡讓玩家自己判斷、自己做決定
+     (使用者原話:「應該用紅色綠色表示預估的勝敗就好」)。 */
+  .battle-intel-verdict { margin-top: 14px; text-align: center; }
+  .battle-intel-verdict-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    font-weight: 700;
     font-size: 13px;
-    text-align: center;
   }
-  .battle-intel-verdict.win { background: rgba(79,209,165,0.12); border: 1px solid var(--ok); color: var(--ok); }
-  .battle-intel-verdict.lose { background: rgba(255,107,107,0.1); border: 1px solid var(--warn); color: var(--warn); }
-  .battle-intel-verdict.draw { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: var(--text-dim); }
+  .battle-intel-verdict-badge.win { background: rgba(79,209,165,0.15); border: 1px solid var(--ok); color: var(--ok); }
+  .battle-intel-verdict-badge.lose { background: rgba(255,107,107,0.12); border: 1px solid var(--warn); color: var(--warn); }
+  .battle-intel-verdict-badge.draw { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: var(--text-dim); }
+  .battle-intel-hint { margin-top: 8px; font-size: 12px; line-height: 1.5; color: var(--text-dim); text-align: center; }
   .dash-resource-row { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--text-dim); }
   .dash-resource-row .metal { color: var(--metal); }
   .dash-resource-row .crystal { color: var(--crystal); }
@@ -1733,12 +1743,21 @@
 <!-- 戰情摘要視窗 — per user request ("收到攻擊警示的前往，應該要能幫玩家直接引導
      到能處理戰情資訊的頁面"): 總覽的來襲警報列自己的「查看戰情」按鈕會就地打開
      這個視窗(見 openBattleIntelModal()),而不是像其他 前往 按鈕一樣直接離開
-     總覽。內容刻意只顯示 resolveOneMission() 實際結算時真正會比較的那兩個數字
-     ——來襲戰鬥機數量(先扣掉防空炮塔吸收)vs 防守方目前在家的戰鬥機數量——
-     並算出「如果現在就打」的勝負預覽，讓玩家不用等艦隊真的抵達才知道自己防
-     得住防不住。底下的「前往艦隊加派戰力」直接跳去目標星球的艦隊分頁，是敵
-     襲抵達前玩家唯一能主動做的兩件事之一(另一件是拖曳調度支援艦隊過來，已
-     經有獨立的拖曳功能可以用，這裡不重複做捷徑)。 -->
+     總覽。
+
+     REVISION(使用者看到實機截圖後的回饋:「我覺得直接說你會獲勝、你會失敗很
+     奇怪，應該用紅色綠色表示預估的勝敗就好，框內可以表示你目前的戰力多少
+     (自行計算該星球上的偵察機、戰鬥機、砲塔...)，讓玩家決定是要生產艦隊或
+     是要移防其他星球的戰力，挽救局面。」)——原本的整句斷言("你會獲勝/你會
+     落敗")拿掉，改成底下小小一顆紅/綠徽章表示預估優劣勢；戰力清單也從只有
+     防空炮塔+戰鬥機兩項，擴充成把偵察機也列出來(標成參考用——偵察機不計入
+     resolveOneMission() 的戰鬥判定，見 SHIP_TYPES.scout.statLine，所以刻意用
+     較淡的顏色跟兩個真正算戰力的數字分開，避免玩家誤會偵察機也能打仗)。徽
+     章下方再加一行小提示，處於劣勢時明講兩個可行動作——生產戰鬥機、或用總
+     覽本來就有的拖曳調度把其他星球的艦隊調過來——呼應使用者說的「讓玩家決
+     定是要生產艦隊或是要移防其他星球的戰力，挽救局面」。「前往艦隊加派戰
+     力」按鈕維持不變；調度部分刻意不加新按鈕，因為總覽在視窗背後本來就還開
+     著，玩家關掉視窗就能直接用既有的拖曳調度功能，不需要重複做捷徑。 -->
 <div class="modal-overlay hidden" id="battle-intel-modal">
   <div class="modal-box">
     <div class="modal-title" id="battle-intel-title">戰情</div>
@@ -1760,7 +1779,12 @@
         <span class="battle-intel-label">你的在家戰鬥機</span>
         <span class="battle-intel-value" id="battle-intel-fighters"></span>
       </div>
-      <div class="battle-intel-verdict" id="battle-intel-verdict"></div>
+      <div class="battle-intel-row battle-intel-row-refonly">
+        <span class="battle-intel-label">你的在家偵察機<br><span class="battle-intel-label-note">(戰力參考用,不計入判定)</span></span>
+        <span class="battle-intel-value" id="battle-intel-scouts"></span>
+      </div>
+      <div class="battle-intel-verdict"><span class="battle-intel-verdict-badge" id="battle-intel-verdict-badge"></span></div>
+      <div class="battle-intel-hint" id="battle-intel-hint"></div>
     </div>
     <div class="modal-actions">
       <button class="modal-cancel" id="battle-intel-close" type="button">關閉</button>
@@ -10493,7 +10517,7 @@
 
     const [turretRows, freshDefenderRows] = await Promise.all([
       restRequest(`buildings?planet_id=eq.${cachedDefender.id}&building_type=eq.turret&select=level`),
-      restRequest(`planets?id=eq.${cachedDefender.id}&select=fighter_count`),
+      restRequest(`planets?id=eq.${cachedDefender.id}&select=fighter_count,scout_count`),
     ]);
     // The modal may already be closed (or reopened on a DIFFERENT mission) by
     // the time this await resolves — bail rather than overwrite whatever's
@@ -10513,6 +10537,13 @@
     const defenderFighters = (freshDefender ? freshDefender.fighter_count : cachedDefender.fighter_count) || 0;
     document.getElementById('battle-intel-fighters').textContent = `${fmt(defenderFighters)} 艘`;
 
+    // 偵察機刻意跟戰鬥機/砲塔分開處理:它不影響下面的勝負判定計算,單純列出來
+    // 讓玩家知道自己這顆星球上還有哪些艦艇可用(呼應使用者原話「自行計算該星
+    // 球上的偵察機、戰鬥機、砲塔」),同一份 fresh 查詢就能一起拿到,不必再多
+    // 打一次 API。
+    const defenderScouts = (freshDefender ? freshDefender.scout_count : cachedDefender.scout_count) || 0;
+    document.getElementById('battle-intel-scouts').textContent = `${fmt(defenderScouts)} 艘`;
+
     // Same three-way branch resolveOneMission() itself uses (effectiveA vs
     // D) — see that function's own comment for why turret absorption applies
     // first. This is a PREVIEW only: nothing here writes anything, and the
@@ -10521,18 +10552,28 @@
     // claims this mission — a player who builds more fighters (or the
     // attacker sends reinforcements, if this game ever allows that) between
     // now and arrival will see a DIFFERENT verdict next time they reopen this.
+    //
+    // REVISION per user feedback: no more declaring "你會獲勝/你會落敗" as a
+    // flat sentence — the badge below is just a coloured 優勢/劣勢/勢均力敵
+    // label, and the hint line underneath spells out the two things the
+    // player can actually go do about it (生產戰鬥機、或調度其他星球的艦
+    // 隊),  instead of asserting an outcome.
     const effectiveAttack = Math.max(0, shipsSent - turretPowerTotal);
-    const verdictEl = document.getElementById('battle-intel-verdict');
-    verdictEl.classList.remove('win', 'lose', 'draw');
+    const badgeEl = document.getElementById('battle-intel-verdict-badge');
+    const hintEl = document.getElementById('battle-intel-hint');
+    badgeEl.classList.remove('win', 'lose', 'draw');
     if (effectiveAttack > defenderFighters) {
-      verdictEl.textContent = `⚠ 以目前戰力,你會落敗(還差 ${fmt(effectiveAttack - defenderFighters)} 艘戰鬥機)`;
-      verdictEl.classList.add('lose');
+      badgeEl.textContent = `⚠ 戰力劣勢(差 ${fmt(effectiveAttack - defenderFighters)} 艘)`;
+      badgeEl.classList.add('lose');
+      hintEl.textContent = '目前擋不住:可以生產更多戰鬥機,或從其他星球拖曳調度艦隊過來支援。';
     } else if (effectiveAttack < defenderFighters) {
-      verdictEl.textContent = `✓ 以目前戰力,你會獲勝(多出 ${fmt(defenderFighters - effectiveAttack)} 艘戰鬥機)`;
-      verdictEl.classList.add('win');
+      badgeEl.textContent = `✓ 戰力優勢(多 ${fmt(defenderFighters - effectiveAttack)} 艘)`;
+      badgeEl.classList.add('win');
+      hintEl.textContent = '目前戰力足夠迎戰,持續生產或調度可以留更多餘裕。';
     } else {
-      verdictEl.textContent = '打平 — 雙方戰鬥機會全數同歸於盡';
-      verdictEl.classList.add('draw');
+      badgeEl.textContent = '勢均力敵';
+      badgeEl.classList.add('draw');
+      hintEl.textContent = '雙方戰力打平,些微變化就會影響結果——建議生產戰鬥機或調度支援以策安全。';
     }
 
     document.getElementById('battle-intel-modal').classList.remove('hidden');
