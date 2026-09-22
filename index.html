@@ -593,6 +593,23 @@
     outline: none;
   }
   #dash-redeploy-modal .redeploy-form-grid { margin-top: 4px; }
+  /* 戰情摘要視窗 (see #battle-intel-modal's own HTML comment + openBattleIntelModal()) */
+  #battle-intel-modal .modal-box { max-width: 380px; }
+  .battle-intel-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; margin-bottom: 8px; }
+  .battle-intel-label { color: var(--text-dim); }
+  .battle-intel-value { font-family: 'Space Mono', monospace; color: var(--text-main); }
+  .battle-intel-divider { border-top: 1px solid var(--line); margin: 10px 0 12px; }
+  .battle-intel-verdict {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    text-align: center;
+  }
+  .battle-intel-verdict.win { background: rgba(79,209,165,0.12); border: 1px solid var(--ok); color: var(--ok); }
+  .battle-intel-verdict.lose { background: rgba(255,107,107,0.1); border: 1px solid var(--warn); color: var(--warn); }
+  .battle-intel-verdict.draw { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: var(--text-dim); }
   .dash-resource-row { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--text-dim); }
   .dash-resource-row .metal { color: var(--metal); }
   .dash-resource-row .crystal { color: var(--crystal); }
@@ -1709,6 +1726,45 @@
     <div class="modal-actions">
       <button class="modal-cancel" id="dash-redeploy-cancel" type="button">取消</button>
       <button class="modal-confirm" id="dash-redeploy-confirm" type="button">派遣移防</button>
+    </div>
+  </div>
+</div>
+
+<!-- 戰情摘要視窗 — per user request ("收到攻擊警示的前往，應該要能幫玩家直接引導
+     到能處理戰情資訊的頁面"): 總覽的來襲警報列自己的「查看戰情」按鈕會就地打開
+     這個視窗(見 openBattleIntelModal()),而不是像其他 前往 按鈕一樣直接離開
+     總覽。內容刻意只顯示 resolveOneMission() 實際結算時真正會比較的那兩個數字
+     ——來襲戰鬥機數量(先扣掉防空炮塔吸收)vs 防守方目前在家的戰鬥機數量——
+     並算出「如果現在就打」的勝負預覽，讓玩家不用等艦隊真的抵達才知道自己防
+     得住防不住。底下的「前往艦隊加派戰力」直接跳去目標星球的艦隊分頁，是敵
+     襲抵達前玩家唯一能主動做的兩件事之一(另一件是拖曳調度支援艦隊過來，已
+     經有獨立的拖曳功能可以用，這裡不重複做捷徑)。 -->
+<div class="modal-overlay hidden" id="battle-intel-modal">
+  <div class="modal-box">
+    <div class="modal-title" id="battle-intel-title">戰情</div>
+    <div class="modal-body">
+      <div class="battle-intel-row">
+        <span class="battle-intel-label">來襲艦隊</span>
+        <span class="battle-intel-value" id="battle-intel-attacker"></span>
+      </div>
+      <div class="battle-intel-row">
+        <span class="battle-intel-label">預計抵達</span>
+        <span class="battle-intel-value" id="battle-intel-eta"></span>
+      </div>
+      <div class="battle-intel-divider"></div>
+      <div class="battle-intel-row">
+        <span class="battle-intel-label">你的防空炮塔</span>
+        <span class="battle-intel-value" id="battle-intel-turret"></span>
+      </div>
+      <div class="battle-intel-row">
+        <span class="battle-intel-label">你的在家戰鬥機</span>
+        <span class="battle-intel-value" id="battle-intel-fighters"></span>
+      </div>
+      <div class="battle-intel-verdict" id="battle-intel-verdict"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="battle-intel-close" type="button">關閉</button>
+      <button class="modal-confirm" id="battle-intel-goto-fleet" type="button">前往艦隊加派戰力</button>
     </div>
   </div>
 </div>
@@ -9612,7 +9668,13 @@
         // matching attacker_planet_id backfill) — a legacy row somehow still
         // missing it just won't match this `in.()` filter, the same
         // acceptable gap every other planet_id-scoped query here already has.
-        restRequest(`fleet_missions?defender_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=defender_planet_id,attacker_name,arrival_time&order=arrival_time.asc`),
+        // id/ships_sent added this round (previously omitted, since this only
+        // fed the compact alert-strip text) — openBattleIntelModal() needs the
+        // attacking fleet's actual size to compute a same-math-as-combat
+        // win/loss preview, and `id` just so the modal knows exactly which
+        // mission it's showing (two simultaneous raids on different colonies
+        // must never get their data crossed).
+        restRequest(`fleet_missions?defender_planet_id=in.(${ids})&resolved=eq.false&mission_type=eq.attack&select=id,defender_planet_id,attacker_name,arrival_time,ships_sent&order=arrival_time.asc`),
         restRequest(`fleet_missions?defender_planet_id=in.(${ids})&mission_type=eq.transport&approval_status=eq.pending&select=defender_planet_id,attacker_name&order=launch_time.asc`),
         // OPTIMIZATION ROUND additions (在途任務): every one of these is the
         // player's own OUTGOING activity — nothing on this page showed any of
@@ -9983,12 +10045,24 @@
     summaryEl.innerHTML = badges.join('');
     summaryEl.classList.toggle('hidden', badges.length === 0);
 
+    // REVISION (user request: "收到攻擊警示的前往，應該要能幫玩家直接引導到能
+    // 處理戰情資訊的頁面") — this row's own action button no longer reuses the
+    // generic dash-goto-btn behavior (jump away to the target colony's default
+    // view, same as every other 前往 button on this page). Per the user's own
+    // confirmed choice among a few options, it now opens an in-place "戰情"
+    // summary modal instead (see openBattleIntelModal() near
+    // #battle-intel-modal's own HTML comment) — 總覽 itself never has to be
+    // left just to check whether this raid is actually a threat. Relabeled
+    // 前往 -> 查看戰情 to match: this button no longer navigates anywhere by
+    // itself, so keeping the old "go" label would have been misleading — the
+    // modal it opens has its own 前往 button for the player who decides they
+    // DO want to jump and act.
     const attackAlertsHtml = attackRows.map(m => {
       const remainSec = (new Date(m.arrival_time).getTime() - Date.now()) / 1000;
       const remainText = remainSec > 0 ? `${formatDuration(remainSec)}後抵達` : '即將抵達';
       return `<div class="dash-alert">
         <span class="dash-alert-text">⚠ ${m.attacker_name} 正在攻擊<span class="dash-alert-planet">(${planetNameById[m.defender_planet_id] || '未知星球'} · ${remainText})</span></span>
-        <button class="dash-goto-btn" data-goto-planet="${m.defender_planet_id}" type="button">前往</button>
+        <button class="dash-battle-intel-btn" data-mission-id="${m.id}" type="button">查看戰情</button>
       </div>`;
     }).join('');
     const transportAlertsHtml = transportRows.map(m => `<div class="dash-alert transport">
@@ -10019,6 +10093,19 @@
             switchToPlanet(target);
           }
         });
+      });
+    });
+
+    // 戰情摘要視窗 — see the REVISION comment above attackAlertsHtml for why
+    // this alert row's own button no longer goes through the generic
+    // data-goto-planet delegation above. `attackRows` (this closure's own
+    // copy, freshly fetched at the top of loadDashboardOverview()) already
+    // has everything openBattleIntelModal() needs per mission, so this just
+    // looks the clicked id up in it rather than re-fetching anything.
+    alertsEl.querySelectorAll('button[data-mission-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mission = attackRows.find(m => String(m.id) === String(btn.dataset.missionId));
+        if (mission) openBattleIntelModal(mission);
       });
     });
 
@@ -10374,6 +10461,108 @@
     document.getElementById('dash-redeploy-modal')?.classList.add('hidden');
     dashboardRedeployContext = null;
   }
+
+  // 戰情摘要視窗 — see #battle-intel-modal's own HTML comment for the full
+  // rationale. Fetches the defender's own 防空炮塔 levels AND its current
+  // fighter_count fresh from the server (not from the cached `myPlanets`
+  // entry — that array is only ever populated once at login/switch and
+  // never re-polled for planets other than the one currently being viewed,
+  // see myPlanets' own declaration comment; a colony under attack that isn't
+  // the one the player happens to be looking at could otherwise show a
+  // fighter count that's stale by an entire session). Runs the EXACT SAME
+  // comparison resolveOneMission() itself makes (effective attack vs the
+  // defender's live fighter_count) so this preview can never drift out of
+  // sync with how combat actually resolves when the fleet really arrives.
+  let battleIntelMission = null; // { id, attacker_name, defender_planet_id, arrival_time, ships_sent } while the modal is open
+  async function openBattleIntelModal(mission) {
+    const cachedDefender = myPlanets.find(p => String(p.id) === String(mission.defender_planet_id));
+    if (!cachedDefender) return;
+    battleIntelMission = mission;
+
+    // Nickname/coord (used only for the title) never change out from under a
+    // player mid-session the way a fighter count can, so the cached copy is
+    // fine for those two fields — only the combat-relevant number below needs
+    // the fresh fetch.
+    const defenderName = cachedDefender.nickname ? cachedDefender.nickname : `座標 ${cachedDefender.coord}`;
+    document.getElementById('battle-intel-title').textContent = `戰情:${defenderName}`;
+
+    const shipsSent = mission.ships_sent || 0;
+    document.getElementById('battle-intel-attacker').textContent = `${mission.attacker_name}(戰鬥機 ${fmt(shipsSent)} 艘)`;
+    const remainSec = (new Date(mission.arrival_time).getTime() - Date.now()) / 1000;
+    document.getElementById('battle-intel-eta').textContent = remainSec > 0 ? `${formatDuration(remainSec)}後` : '即將抵達';
+
+    const [turretRows, freshDefenderRows] = await Promise.all([
+      restRequest(`buildings?planet_id=eq.${cachedDefender.id}&building_type=eq.turret&select=level`),
+      restRequest(`planets?id=eq.${cachedDefender.id}&select=fighter_count`),
+    ]);
+    // The modal may already be closed (or reopened on a DIFFERENT mission) by
+    // the time this await resolves — bail rather than overwrite whatever's
+    // now showing with stale data for a mission the player isn't even
+    // looking at any more.
+    if (battleIntelMission !== mission) return;
+    const turretCount = (turretRows || []).length;
+    const turretPowerTotal = (turretRows || []).reduce((sum, b) => sum + turretPower(b.level), 0);
+    document.getElementById('battle-intel-turret').textContent = turretCount > 0
+      ? `${turretCount} 座(吸收 ${fmt(turretPowerTotal)} 點戰力)`
+      : '尚未建造';
+
+    // Falls back to the cached count only if the fresh fetch somehow came
+    // back empty (e.g. a transient network hiccup) — better a possibly-stale
+    // number than a false "0 戰鬥機, you will definitely lose" scare.
+    const freshDefender = freshDefenderRows && freshDefenderRows[0];
+    const defenderFighters = (freshDefender ? freshDefender.fighter_count : cachedDefender.fighter_count) || 0;
+    document.getElementById('battle-intel-fighters').textContent = `${fmt(defenderFighters)} 艘`;
+
+    // Same three-way branch resolveOneMission() itself uses (effectiveA vs
+    // D) — see that function's own comment for why turret absorption applies
+    // first. This is a PREVIEW only: nothing here writes anything, and the
+    // real fight still resolves independently, by the real live numbers at
+    // the moment the fleet actually arrives, whenever pollUpdates() next
+    // claims this mission — a player who builds more fighters (or the
+    // attacker sends reinforcements, if this game ever allows that) between
+    // now and arrival will see a DIFFERENT verdict next time they reopen this.
+    const effectiveAttack = Math.max(0, shipsSent - turretPowerTotal);
+    const verdictEl = document.getElementById('battle-intel-verdict');
+    verdictEl.classList.remove('win', 'lose', 'draw');
+    if (effectiveAttack > defenderFighters) {
+      verdictEl.textContent = `⚠ 以目前戰力,你會落敗(還差 ${fmt(effectiveAttack - defenderFighters)} 艘戰鬥機)`;
+      verdictEl.classList.add('lose');
+    } else if (effectiveAttack < defenderFighters) {
+      verdictEl.textContent = `✓ 以目前戰力,你會獲勝(多出 ${fmt(defenderFighters - effectiveAttack)} 艘戰鬥機)`;
+      verdictEl.classList.add('win');
+    } else {
+      verdictEl.textContent = '打平 — 雙方戰鬥機會全數同歸於盡';
+      verdictEl.classList.add('draw');
+    }
+
+    document.getElementById('battle-intel-modal').classList.remove('hidden');
+  }
+
+  function closeBattleIntelModal() {
+    document.getElementById('battle-intel-modal')?.classList.add('hidden');
+    battleIntelMission = null;
+  }
+
+  document.getElementById('battle-intel-close')?.addEventListener('click', closeBattleIntelModal);
+  document.getElementById('battle-intel-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'battle-intel-modal') closeBattleIntelModal();
+  });
+  // 前往艦隊加派戰力 — the one concrete thing this modal lets the player DO
+  // (beyond just reading the preview): jump straight to the target colony's
+  // 艦隊 section to queue more 戰鬥機 before the raid lands. Reuses the same
+  // exitDashboardView() + switchToPlanet() + nav-click pattern every other
+  // 前往-flavored shortcut on this page already uses (see
+  // activateDashboardTransportClick() for the closest sibling).
+  document.getElementById('battle-intel-goto-fleet')?.addEventListener('click', async () => {
+    const mission = battleIntelMission;
+    if (!mission) return;
+    const defenderPlanet = myPlanets.find(p => String(p.id) === String(mission.defender_planet_id));
+    closeBattleIntelModal();
+    if (!defenderPlanet) return;
+    exitDashboardView();
+    await switchToPlanet(defenderPlanet);
+    document.querySelector('.section-nav-item[data-nav-target="fleet-roster-section"]')?.click();
+  });
 
   // Identical formula to updateRedeployCargoEstimate() (the page-level 移防
   // form's own live estimate) — just wired to this modal's `dbrd-*` ids.
