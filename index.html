@@ -1695,37 +1695,52 @@
      openDashboardRedeployModal(). Same 7-field shape (mothership/scout/
      fighter/transport + metal/crystal/food) as the page-level 移防 form,
      reusing .redeploy-form-grid/.ship-input-group for identical layout, just
-     scoped to `dbrd-*` ids so nothing collides with that form's own. -->
+     scoped to `dbrd-*` ids so nothing collides with that form's own.
+
+     REVISION — 拖曳單一資源卡片(金屬/晶體/糧食)時的簡化模式:使用者回饋
+     「我想讓三種資源的移轉單純一點，比方說我想移動路比一號的金屬到路比二
+     號，拖移過去後就單純問我要移轉多少金屬，計算並卡控運輸艦數量(對面沒那
+     麼多艦隊的格數也要卡控)。」——確認過三個簡化方向後,使用者選了「一次只
+     問一種資源」。做法:同一個視窗加一個 .simple-mode 狀態(見
+     openSimpleResourceTransferModal()/setRedeploySimpleMode()),只顯示拖曳
+     的那一項資源欄位(用底下每個 .ship-input-group 新增的 data-field 屬性
+     切換顯示/隱藏),運輸艦數量不再讓玩家自己填,改由
+     updateSimpleResourceEstimate() 即時算好並寫進隱藏的 #dbrd-transport(公
+     式:ceil(數量 / 每艘容量),超過在家運輸艦數量時就卡在現有運輸艦能載的上
+     限),目的地的艦隊格數上限也在開窗當下先抓一次讓提示即時反映「空間只剩幾
+     艘」。拖曳「艦隊」卡片(startResourceDrag() 的第 4 種 resourceType)維持
+     原本的完整表單不變,因為那本來就是同時搬 4 種艦艇,不是單一資源,不適用
+     這個簡化。 -->
 <div class="modal-overlay hidden" id="dash-redeploy-modal">
   <div class="modal-box">
     <div class="modal-title" id="dash-redeploy-title">移防</div>
     <div class="modal-body">
       <div class="redeploy-form-grid">
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="mothership">
           <label class="ship-input-label" for="dbrd-mothership">殖民母艦</label>
           <input type="number" class="ship-input" id="dbrd-mothership" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="scout">
           <label class="ship-input-label" for="dbrd-scout">偵察機</label>
           <input type="number" class="ship-input" id="dbrd-scout" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="fighter">
           <label class="ship-input-label" for="dbrd-fighter">戰鬥機</label>
           <input type="number" class="ship-input" id="dbrd-fighter" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="transport">
           <label class="ship-input-label" for="dbrd-transport">運輸艦</label>
           <input type="number" class="ship-input" id="dbrd-transport" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="metal">
           <label class="ship-input-label" for="dbrd-metal">攜帶金屬</label>
           <input type="number" class="ship-input" id="dbrd-metal" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="crystal">
           <label class="ship-input-label" for="dbrd-crystal">攜帶晶體</label>
           <input type="number" class="ship-input" id="dbrd-crystal" min="0" value="0">
         </div>
-        <div class="ship-input-group">
+        <div class="ship-input-group" data-field="food">
           <label class="ship-input-label" for="dbrd-food">攜帶糧食</label>
           <input type="number" class="ship-input" id="dbrd-food" min="0" value="0">
         </div>
@@ -10465,11 +10480,22 @@
     document.querySelector('.section-nav-item[data-nav-target="dispatch-section"]')?.click();
   }
 
+  // 顯示/隱藏 .redeploy-form-grid 底下的欄位 — resourceType 為 null/undefined
+  // 時顯示全部 7 個欄位(一般移防用),傳入 'metal'/'crystal'/'food' 時只顯示
+  // 那一個欄位(拖曳單一資源卡片的簡化模式用,見 openSimpleResourceTransferModal())。
+  function setRedeploySimpleMode(resourceType) {
+    document.querySelectorAll('#dash-redeploy-modal .ship-input-group[data-field]').forEach(group => {
+      group.classList.toggle('hidden', !!resourceType && group.dataset.field !== resourceType);
+    });
+  }
+
   function openDashboardRedeployModal(originPlanet, destPlanet) {
-    dashboardRedeployContext = { originPlanet, destPlanet };
+    dashboardRedeployContext = { originPlanet, destPlanet, simpleResourceType: null, destStatus: null };
+    setRedeploySimpleMode(null);
     const originName = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
     const destName = destPlanet.nickname ? destPlanet.nickname : `座標 ${destPlanet.coord}`;
     document.getElementById('dash-redeploy-title').textContent = `移防:${originName} → ${destName}`;
+    document.getElementById('dash-redeploy-confirm').textContent = '派遣移防';
     ['dbrd-mothership', 'dbrd-scout', 'dbrd-fighter', 'dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '0';
@@ -10479,6 +10505,44 @@
     msg.className = 'attack-msg';
     updateDashboardRedeployCargoEstimate();
     document.getElementById('dash-redeploy-modal').classList.remove('hidden');
+  }
+
+  // 簡化版:拖曳單一資源卡片(金屬/晶體/糧食)時開啟,只顯示那一項資源的輸入
+  // 框,運輸艦數量交給 updateSimpleResourceEstimate() 自動算,不讓玩家自己填
+  // ——見 #dash-redeploy-modal 自己的 HTML 註解裡的完整說明與使用者原話。
+  function openSimpleResourceTransferModal(originPlanet, destPlanet, resourceType) {
+    const ctx = { originPlanet, destPlanet, simpleResourceType: resourceType, destStatus: null };
+    dashboardRedeployContext = ctx;
+    setRedeploySimpleMode(resourceType);
+    const originName = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
+    const destName = destPlanet.nickname ? destPlanet.nickname : `座標 ${destPlanet.coord}`;
+    const resourceLabel = { metal: '金屬', crystal: '晶體', food: '糧食' }[resourceType] || resourceType;
+    document.getElementById('dash-redeploy-title').textContent = `搬運${resourceLabel}:${originName} → ${destName}`;
+    document.getElementById('dash-redeploy-confirm').textContent = '派遣運輸';
+    ['dbrd-mothership', 'dbrd-scout', 'dbrd-fighter', 'dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '0';
+    });
+    const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
+    const startAmount = Math.floor((Number(originPlanet[resourceType]) || 0) * 0.5);
+    const field = document.getElementById(fieldId);
+    if (field) field.value = String(startAmount);
+    const msg = document.getElementById('dbrd-msg');
+    msg.textContent = '';
+    msg.className = 'attack-msg';
+    updateSimpleResourceEstimate();
+    document.getElementById('dash-redeploy-modal').classList.remove('hidden');
+    // 目的地艦隊格數上限跟戰情摘要視窗的防空炮塔/戰鬥機一樣,開窗當下先抓一次
+    // 給即時提示用——真正送出時 launchRedeployFromDashboard() 仍會再抓一次新
+    // 鮮資料做最終確認,這裡只是讓玩家在按下派遣之前就能先看到「空間夠不
+    // 夠」,不用等送出失敗才知道。同一套「context 物件參照比對」防止舊視窗
+    // 關掉/換了新目標之後,這個非同步結果還跑回來寫錯地方,跟 battle-intel-
+    // modal 的 `battleIntelMission !== mission` 檢查是同一個防呆手法。
+    fetchDestinationFleetStatus(destPlanet.id).then(status => {
+      if (dashboardRedeployContext !== ctx) return;
+      ctx.destStatus = status;
+      updateSimpleResourceEstimate();
+    }).catch(() => { /* best-effort live hint only — final check still happens at launch time */ });
   }
 
   function closeDashboardRedeployModal() {
@@ -10621,8 +10685,57 @@
     note.classList.toggle('insufficient', over);
     if (over) note.textContent += ` · 超過上限,請增加運輸艦或減少攜帶量`;
   }
+
+  // 簡化模式專用的即時估算 — 跟上面 updateDashboardRedeployCargoEstimate()
+  // 的差別是:玩家只填「要搬多少資源」這一個數字,運輸艦數量整個由這裡算好
+  // 直接寫回隱藏的 #dbrd-transport(所以 onDashboardRedeployConfirmClick()
+  // 完全不用改——它照樣讀 dbrd-transport 的值,只是這個值現在是自動算出來
+  // 的,不是玩家自己打的)。同時把目的地艦隊空間(若已抓到)一起算進「夠不
+  // 夠」的提示裡,呼應使用者要求的「對面沒那麼多艦隊的格數也要卡控」。
+  function updateSimpleResourceEstimate() {
+    const ctx = dashboardRedeployContext;
+    if (!ctx || !ctx.simpleResourceType) return;
+    const resourceType = ctx.simpleResourceType;
+    const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
+    const field = document.getElementById(fieldId);
+    const note = document.getElementById('dbrd-cargo-note');
+    if (!field || !note) return;
+    const amount = Math.max(0, Math.floor(parseFloat(field.value) || 0));
+    const perShip = SHIP_TYPES.transport.cargoCapacity || 1;
+    const neededTransports = Math.ceil(amount / perShip);
+    const available = ctx.originPlanet.transport_count || 0;
+    const actualTransports = Math.min(neededTransports, available);
+    const transportField = document.getElementById('dbrd-transport');
+    if (transportField) transportField.value = String(actualTransports);
+
+    let text = amount > 0
+      ? `需要運輸艦 ${fmt(neededTransports)} 艘(在家 ${fmt(available)} 艘,每艘可載 ${fmt(perShip)})`
+      : `在家運輸艦 ${fmt(available)} 艘,每艘可載 ${fmt(perShip)}`;
+    let insufficient = false;
+    if (neededTransports > available) {
+      text += ` · 運輸艦不足,目前最多能搬運 ${fmt(available * perShip)}`;
+      insufficient = true;
+    } else if (ctx.destStatus) {
+      const room = Math.max(0, ctx.destStatus.cap - ctx.destStatus.total);
+      if (actualTransports > room) {
+        text += ` · 目的地艦隊空間只剩 ${fmt(room)} 艘,無法容納這些運輸艦`;
+        insufficient = true;
+      }
+    }
+    note.textContent = text;
+    note.classList.toggle('insufficient', insufficient);
+  }
+
+  // 依目前是簡化模式還是完整模式,分派到對應的即時估算函式。
+  function handleDashboardRedeployFieldInput() {
+    if (dashboardRedeployContext && dashboardRedeployContext.simpleResourceType) {
+      updateSimpleResourceEstimate();
+    } else {
+      updateDashboardRedeployCargoEstimate();
+    }
+  }
   ['dbrd-transport', 'dbrd-metal', 'dbrd-crystal', 'dbrd-food'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', updateDashboardRedeployCargoEstimate);
+    document.getElementById(id)?.addEventListener('input', handleDashboardRedeployFieldInput);
   });
   document.getElementById('dash-redeploy-cancel')?.addEventListener('click', closeDashboardRedeployModal);
   document.getElementById('dash-redeploy-modal')?.addEventListener('click', (e) => {
@@ -10632,7 +10745,7 @@
 
   async function onDashboardRedeployConfirmClick() {
     if (!dashboardRedeployContext) return;
-    const { originPlanet, destPlanet } = dashboardRedeployContext;
+    const { originPlanet, destPlanet, simpleResourceType } = dashboardRedeployContext;
     const msg = document.getElementById('dbrd-msg');
     msg.className = 'attack-msg';
     const originLabel = originPlanet.nickname ? originPlanet.nickname : `座標 ${originPlanet.coord}`;
@@ -10644,6 +10757,18 @@
     const metal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-metal').value) || 0));
     const crystal = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-crystal').value) || 0));
     const food = Math.max(0, Math.floor(parseFloat(document.getElementById('dbrd-food').value) || 0));
+
+    // 簡化模式底下,運輸艦數量是自動算的、玩家從頭到尾看不到艦隊欄位,所以
+    // 「請至少指派 1 艘艦艇」這種完整模式的措辭在這裡會讓人一頭霧水——這兩個
+    // 分支先攔截最常見的兩種情況(還沒填數量 / 在家運輸艦不夠用到連 1 艘都派
+    // 不出去),換成講「資源」跟「運輸艦不足」的說法;其餘檢查(金屬/晶體/糧
+    // 食庫存、目的地艦隊上限...)沿用底下同一套邏輯,不用重複寫。
+    if (simpleResourceType) {
+      const resourceLabel = { metal: '金屬', crystal: '晶體', food: '糧食' }[simpleResourceType] || simpleResourceType;
+      const amount = { metal, crystal, food }[simpleResourceType] || 0;
+      if (amount <= 0) { msg.textContent = `請輸入要搬運的${resourceLabel}數量`; return; }
+      if (transport <= 0) { msg.textContent = `${originLabel}沒有運輸艦,無法搬運${resourceLabel}`; return; }
+    }
 
     // Cheap pre-check against the dashboard's own (possibly up to ~8s stale —
     // same staleness every other dashboard number already tolerates) cached
@@ -10686,7 +10811,14 @@
     if (!result.ok) { msg.textContent = result.message; return; }
 
     closeDashboardRedeployModal();
-    showToast(`艦隊已從${originLabel}出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    if (simpleResourceType) {
+      const resourceLabel = { metal: '金屬', crystal: '晶體', food: '糧食' }[simpleResourceType] || simpleResourceType;
+      const amount = { metal, crystal, food }[simpleResourceType] || 0;
+      const destLabel = destPlanet.nickname ? destPlanet.nickname : `座標 ${destPlanet.coord}`;
+      showToast(`${fmt(amount)} ${resourceLabel}已從${originLabel}出發前往${destLabel},預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    } else {
+      showToast(`艦隊已從${originLabel}出發前往座標 ${destPlanet.coord} 駐防,預計 ${formatDuration(travelSec)} 後抵達`, 'success', 8000);
+    }
     await loadDashboardOverview();
   }
 
@@ -11098,38 +11230,19 @@
     card.addEventListener('pointerdown', (e) => startResourceDrag(e, resourceType, card));
   });
 
-  // Opens the same 移防 modal 總覽's own drag feature uses, then pre-fills
-  // ONLY whatever was actually dragged — every other field is left at
-  // openDashboardRedeployModal()'s normal all-zero default for the player to
-  // fill in themselves, per the user's own confirmed choice.
+  // fleet(拖曳「艦隊」卡片)一樣開完整版的移防視窗,並把 4 種艦艇欄位都預填
+  // 成在家數量的一半(理由跟改版前一樣:一次搬全部風險太高,先給個保守的起
+  // 始值讓玩家自己調整;資源欄位留 0,因為拖艦隊卡片講的是艦艇,不是貨物,
+  // 真的想順便帶資源可以自己在同一個視窗裡填)。
   //
-  // - metal/crystal/food: pre-fills that one resource field to HALF of the
-  //   current stock (floored), not the full amount — a redeploy also burns
-  //   some food for the trip itself on top of whatever's loaded as cargo,
-  //   so defaulting 糧食 to 100% of current stock would leave zero headroom
-  //   for that travel cost and fail validation the moment the player tried
-  //   to confirm without first lowering it. A fixed 50% leaves that
-  //   headroom automatically (as well as being a more conservative "don't
-  //   empty the whole stockpile in one drag" default for 金屬/晶體 too).
-  //   Also defaults the transport count to just enough to carry that
-  //   amount (capped at how many transport ships are actually on hand), so
-  //   the cargo-capacity note starts clean instead of immediately warning
-  //   about 0 capacity.
-  // - fleet: pre-fills ALL FOUR ship-count fields to half of each type's
-  //   own home count (same 50% convention, for the same "don't empty
-  //   everything in one drag, but still hand the player a real starting
-  //   point" reasoning) — the whole 艦隊 card covers every ship type at
-  //   once, unlike the single-resource cards, so there's no one field to
-  //   single out. Resource fields stay 0: dragging the fleet card is about
-  //   moving ships, not cargo — a player who also wants to send resources
-  //   can still fill those in by hand, or drag one of the resource cards
-  //   into the SAME already-open modal afterward (dashboardRedeployContext
-  //   stays set until the modal closes, so a second drag just re-fills the
-  //   one new field on top of what's already there).
+  // metal/crystal/food(拖曳單一資源卡片)則改走 REVISION 之後的簡化流程
+  // (openSimpleResourceTransferModal())——使用者本人選的做法:一次只問一
+  // 種資源要搬多少,運輸艦數量跟目的地艦隊格數都自動算/自動卡,不用像以前
+  // 一樣還要自己算要填幾艘運輸艦。
   function openResourceRedeployModal(originPlanet, destPlanet, resourceType) {
     dismissDragHint(); // an actual completed drag proves the feature was found
-    openDashboardRedeployModal(originPlanet, destPlanet);
     if (resourceType === 'fleet') {
+      openDashboardRedeployModal(originPlanet, destPlanet);
       ['mothership', 'scout', 'fighter', 'transport'].forEach(type => {
         const field = document.getElementById(`dbrd-${type}`);
         if (!field) return;
@@ -11139,18 +11252,7 @@
       updateDashboardRedeployCargoEstimate();
       return;
     }
-    const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
-    const field = document.getElementById(fieldId);
-    if (!field) return;
-    const amount = Math.floor((Number(originPlanet[resourceType]) || 0) * 0.5);
-    field.value = String(amount);
-    const perShip = SHIP_TYPES.transport.cargoCapacity;
-    if (amount > 0 && perShip > 0) {
-      const neededTransports = Math.min(originPlanet.transport_count || 0, Math.ceil(amount / perShip));
-      const transportField = document.getElementById('dbrd-transport');
-      if (transportField) transportField.value = String(neededTransports);
-    }
-    updateDashboardRedeployCargoEstimate();
+    openSimpleResourceTransferModal(originPlanet, destPlanet, resourceType);
   }
 
   // ============================================================
