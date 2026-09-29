@@ -10482,10 +10482,19 @@
 
   // 顯示/隱藏 .redeploy-form-grid 底下的欄位 — resourceType 為 null/undefined
   // 時顯示全部 7 個欄位(一般移防用),傳入 'metal'/'crystal'/'food' 時只顯示
-  // 那一個欄位(拖曳單一資源卡片的簡化模式用,見 openSimpleResourceTransferModal())。
+  // 那一個資源欄位「加上」運輸艦欄位(拖曳單一資源卡片的簡化模式用,見
+  // openSimpleResourceTransferModal())。
+  //
+  // REVISION:運輸艦欄位原本在簡化模式下是隱藏的(數量純粹自動算,玩家看不
+  // 到也改不了)——使用者實際用過後回饋:「改預設搬運數量為該星球運輸艦最大
+  // 的搬運輛，另外在旁邊多一個運輸艦的欄位，讓玩家可以藉由調整運輸艦數量調
+  // 整該資源的搬運量。」所以現在簡化模式改成顯示兩個欄位:那一項資源 +
+  // 運輸艦,兩個都能自己填,見 updateSimpleResourceEstimate() 的雙向連動。
   function setRedeploySimpleMode(resourceType) {
     document.querySelectorAll('#dash-redeploy-modal .ship-input-group[data-field]').forEach(group => {
-      group.classList.toggle('hidden', !!resourceType && group.dataset.field !== resourceType);
+      const field = group.dataset.field;
+      const visible = !resourceType || field === resourceType || field === 'transport';
+      group.classList.toggle('hidden', !visible);
     });
   }
 
@@ -10507,9 +10516,17 @@
     document.getElementById('dash-redeploy-modal').classList.remove('hidden');
   }
 
-  // 簡化版:拖曳單一資源卡片(金屬/晶體/糧食)時開啟,只顯示那一項資源的輸入
-  // 框,運輸艦數量交給 updateSimpleResourceEstimate() 自動算,不讓玩家自己填
-  // ——見 #dash-redeploy-modal 自己的 HTML 註解裡的完整說明與使用者原話。
+  // 簡化版:拖曳單一資源卡片(金屬/晶體/糧食)時開啟,顯示那一項資源 + 運輸艦
+  // 兩個欄位——見 #dash-redeploy-modal 自己的 HTML 註解裡的完整說明與使用者
+  // 原話。
+  //
+  // REVISION 預設值:原本是「資源欄位預設庫存的 50%,運輸艦自動算剛好夠
+  // 載」,使用者回饋覺得應該反過來——「改預設搬運數量為該星球運輸艦最大的
+  // 搬運輛」:運輸艦欄位預設「在家全部」的數量,資源欄位預設「這些運輸艦全
+  // 部出動能載的量」(還是不能超過現有庫存)。玩家之後可以調降運輸艦數量,
+  // 資源欄位會跟著自動降到新的載運上限(updateSimpleResourceEstimate() 的
+  // 'transport' 分支),也可以反過來直接調資源數量,運輸艦會自動算需要幾艘
+  // ('amount' 分支)——兩個欄位互相連動,不管先動哪一個都能得到一致的結果。
   function openSimpleResourceTransferModal(originPlanet, destPlanet, resourceType) {
     const ctx = { originPlanet, destPlanet, simpleResourceType: resourceType, destStatus: null };
     dashboardRedeployContext = ctx;
@@ -10524,13 +10541,18 @@
       if (el) el.value = '0';
     });
     const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
-    const startAmount = Math.floor((Number(originPlanet[resourceType]) || 0) * 0.5);
     const field = document.getElementById(fieldId);
+    const transportField = document.getElementById('dbrd-transport');
+    const perShip = SHIP_TYPES.transport.cargoCapacity || 1;
+    const available = originPlanet.transport_count || 0;
+    const stock = Number(originPlanet[resourceType]) || 0;
+    const startAmount = Math.min(stock, available * perShip);
+    if (transportField) transportField.value = String(available);
     if (field) field.value = String(startAmount);
     const msg = document.getElementById('dbrd-msg');
     msg.textContent = '';
     msg.className = 'attack-msg';
-    updateSimpleResourceEstimate();
+    updateSimpleResourceEstimate('transport');
     document.getElementById('dash-redeploy-modal').classList.remove('hidden');
     // 目的地艦隊格數上限跟戰情摘要視窗的防空炮塔/戰鬥機一樣,開窗當下先抓一次
     // 給即時提示用——真正送出時 launchRedeployFromDashboard() 仍會再抓一次新
@@ -10687,26 +10709,61 @@
   }
 
   // 簡化模式專用的即時估算 — 跟上面 updateDashboardRedeployCargoEstimate()
-  // 的差別是:玩家只填「要搬多少資源」這一個數字,運輸艦數量整個由這裡算好
-  // 直接寫回隱藏的 #dbrd-transport(所以 onDashboardRedeployConfirmClick()
-  // 完全不用改——它照樣讀 dbrd-transport 的值,只是這個值現在是自動算出來
-  // 的,不是玩家自己打的)。同時把目的地艦隊空間(若已抓到)一起算進「夠不
-  // 夠」的提示裡,呼應使用者要求的「對面沒那麼多艦隊的格數也要卡控」。
-  function updateSimpleResourceEstimate() {
+  // 的差別是:資源欄位跟運輸艦欄位是「雙向連動」的兩個獨立輸入框(而不是像
+  // 完整模式那樣分開各自獨立):
+  //   - source==='amount':玩家剛改的是資源數量,算出剛好夠載的運輸艦數量
+  //     (ceil(數量/每艘容量)),寫回運輸艦欄位——但不超過在家實際的數量上
+  //     限;超過時運輸艦欄位卡在上限,並跳出「運輸艦不足」提示。
+  //   - source==='transport':玩家剛改的是運輸艦數量(REVISION 新增,原本
+  //     這個欄位是隱藏的,回饋見 openSimpleResourceTransferModal() 的
+  //     REVISION 註解),先把這個數字夾在 [0, 在家上限] 之間(玩家不能派出
+  //     超過自己有的運輸艦),再把資源欄位改成「這些運輸艦全部能載的量,但
+  //     不超過現有庫存」——直接對應使用者原話「讓玩家可以藉由調整運輸艦數
+  //     量調整該資源的搬運量」。
+  //   - source 省略(例如 fetchDestinationFleetStatus() 抓到目的地艦隊狀態
+  //     後回來刷新提示文字):兩個欄位的值都不動,只重新算一次提示文字。
+  // 不管哪個方向,運輸艦數量最後都會確實寫進 #dbrd-transport,所以
+  // onDashboardRedeployConfirmClick()/launchRedeployFromDashboard() 完全不
+  // 用改——它們照樣讀 dbrd-transport 的值。目的地艦隊空間(若已抓到)也一起
+  // 算進提示裡,呼應使用者要求的「對面沒那麼多艦隊的格數也要卡控」。
+  function updateSimpleResourceEstimate(source) {
     const ctx = dashboardRedeployContext;
     if (!ctx || !ctx.simpleResourceType) return;
     const resourceType = ctx.simpleResourceType;
     const fieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[resourceType];
     const field = document.getElementById(fieldId);
-    const note = document.getElementById('dbrd-cargo-note');
-    if (!field || !note) return;
-    const amount = Math.max(0, Math.floor(parseFloat(field.value) || 0));
-    const perShip = SHIP_TYPES.transport.cargoCapacity || 1;
-    const neededTransports = Math.ceil(amount / perShip);
-    const available = ctx.originPlanet.transport_count || 0;
-    const actualTransports = Math.min(neededTransports, available);
     const transportField = document.getElementById('dbrd-transport');
-    if (transportField) transportField.value = String(actualTransports);
+    const note = document.getElementById('dbrd-cargo-note');
+    if (!field || !transportField || !note) return;
+    const perShip = SHIP_TYPES.transport.cargoCapacity || 1;
+    const available = ctx.originPlanet.transport_count || 0;
+    const stock = Number(ctx.originPlanet[resourceType]) || 0;
+
+    let amount = Math.max(0, Math.floor(parseFloat(field.value) || 0));
+    let actualTransports;
+    let neededTransports;
+    if (source === 'transport') {
+      // 玩家直接改運輸艦數量 — 夾在 [0, 在家上限] 之間(不能派出比自己有的
+      // 還多),資源欄位跟著改成「這些運輸艦全部能載的量」,但不超過現有庫
+      // 存(不能搬比自己有的還多)。
+      let transportInput = Math.max(0, parseInt(transportField.value, 10) || 0);
+      actualTransports = Math.min(transportInput, available);
+      if (actualTransports !== transportInput) transportField.value = String(actualTransports);
+      amount = Math.min(stock, actualTransports * perShip);
+      field.value = String(amount);
+      neededTransports = actualTransports;
+    } else if (source === 'amount') {
+      // 玩家直接改資源數量 — 算出剛好夠載的運輸艦數量,寫回運輸艦欄位,但
+      // 不超過在家實際數量上限。
+      neededTransports = Math.ceil(amount / perShip);
+      actualTransports = Math.min(neededTransports, available);
+      transportField.value = String(actualTransports);
+    } else {
+      // 兩個欄位都不動,只是重新算一次提示文字用(例如目的地艦隊狀態剛抓
+      // 回來)。
+      actualTransports = Math.max(0, parseInt(transportField.value, 10) || 0);
+      neededTransports = Math.ceil(amount / perShip);
+    }
 
     let text = amount > 0
       ? `需要運輸艦 ${fmt(neededTransports)} 艘(在家 ${fmt(available)} 艘,每艘可載 ${fmt(perShip)})`
@@ -10726,10 +10783,17 @@
     note.classList.toggle('insufficient', insufficient);
   }
 
-  // 依目前是簡化模式還是完整模式,分派到對應的即時估算函式。
-  function handleDashboardRedeployFieldInput() {
-    if (dashboardRedeployContext && dashboardRedeployContext.simpleResourceType) {
-      updateSimpleResourceEstimate();
+  // 依目前是簡化模式還是完整模式,分派到對應的即時估算函式。簡化模式下還要
+  // 分辨這次是哪個欄位觸發的(運輸艦本身,或是那一項資源),才能決定
+  // updateSimpleResourceEstimate() 該用哪個方向連動(見該函式自己的說明)。
+  function handleDashboardRedeployFieldInput(e) {
+    const ctx = dashboardRedeployContext;
+    if (ctx && ctx.simpleResourceType) {
+      const resourceFieldId = { metal: 'dbrd-metal', crystal: 'dbrd-crystal', food: 'dbrd-food' }[ctx.simpleResourceType];
+      const source = e && e.target && e.target.id === 'dbrd-transport' ? 'transport'
+        : e && e.target && e.target.id === resourceFieldId ? 'amount'
+        : undefined;
+      updateSimpleResourceEstimate(source);
     } else {
       updateDashboardRedeployCargoEstimate();
     }
