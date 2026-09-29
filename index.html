@@ -500,6 +500,22 @@
   .dash-badge:hover { filter: brightness(1.15); }
   .dash-badge.attack { border-color: var(--warn); color: var(--warn); background: rgba(255,107,107,0.08); }
   .dash-badge.transport, .dash-badge.idle { border-color: var(--crystal); color: var(--crystal); background: rgba(240,168,80,0.08); }
+  /* REVISION (user report: "兩個攻擊警報與三個殖民地可派遣的警示點進去後只跳
+     紅眼露比主星球，意義不明，容易讓玩家無所適從") — a badge covering MORE
+     THAN ONE colony no longer jumps away to one arbitrarily-chosen match (see
+     the `badges` array in renderDashboardOverview() for the full story); it
+     scrolls to the section that already itemizes every match instead, and
+     this pulse briefly highlights exactly what to look at there (the whole
+     alerts block for 攻擊/運輸, or just the specific idle/explore-idle cards)
+     so scrolling to a long list of colonies doesn't leave the player hunting
+     for which ones the badge actually meant. `--flash-color` is set inline
+     per use (rgba, matching that badge's own existing color) rather than
+     hard-coded here, so one animation serves every badge color. */
+  @keyframes dashFlashPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+    50% { box-shadow: 0 0 0 6px var(--flash-color, rgba(240,168,80,0.35)); }
+  }
+  .dash-flash-pulse { animation: dashFlashPulse 1.1s ease-out 2; border-radius: 10px; }
   .dashboard-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
   .dashboard-alerts:empty { display: none; margin-bottom: 0; }
   .dash-alert {
@@ -10086,20 +10102,54 @@
     // everything else, so a player with many colonies doesn't have to scan
     // every card just to find out nothing's wrong.
     // REVISION (user request: "我希望有提醒時可以進行點擊跳轉") — each badge is
-    // now a real `<button data-goto-planet="...">` (same attribute the alert
-    // entries' own 前往 buttons and the planet cards' own 前往 buttons already
-    // use, wired up by the SAME event-delegation loop below) instead of an
-    // inert `<span>`, jumping straight to whichever colony the badge is
-    // actually about — the first attack/transport alert's target planet for
-    // those two, or the first idle/explore-idle colony in list order for the
-    // other two. With N>1 matches there's no single "the" planet a click
-    // could mean, so it jumps to the first one (list order = same order the
-    // per-planet cards below render in) rather than doing nothing.
+    // now a real `<button>` instead of an inert `<span>`.
+    //
+    // REVISION 2 (user report, with a screenshot of exactly this: "兩個攻擊
+    // 警報與三個殖民地可派遣的警示點進去後只跳紅眼露比主星球，意義不明，容易
+    // 讓玩家無所適從") — the original version of this REVISION jumped to the
+    // FIRST matching colony whenever a badge covered more than one (there's
+    // no single "the" planet a 2-attack or 3-idle badge could mean), which
+    // is exactly what confused the user: clicking "2 個攻擊警報" always
+    // landing on the same one colony looks like a bug, not a deliberate
+    // choice, and gives no way to see or reach the OTHER match from there.
+    // Fixed by splitting on count instead of always jumping:
+    //   - count === 1: still an unambiguous single colony — jump straight to
+    //     it, exactly as before (`data-goto-planet`, same shared delegation
+    //     every other 前往/goto button on this page already uses).
+    //   - count > 1: no single click destination makes sense, so instead of
+    //     guessing, stay on 總覽 and scroll straight to whichever section
+    //     ALREADY itemizes every one of these matches individually
+    //     (`data-goto-section`) — `#dashboard-alerts` already lists every
+    //     attack/transport row one by one, and `#dashboard-planets` already
+    //     shows every colony's own card with its own idle/explore-idle
+    //     indicator inline. A `.dash-flash-pulse` (see its own CSS comment)
+    //     briefly highlights the destination so the player's eye lands on
+    //     the right thing without having to hunt: the whole alerts block for
+    //     攻擊/運輸 (every row shown there IS a match, nothing to pick out),
+    //     or just the SPECIFIC idle/explore-idle `.dash-planet-card`s for
+    //     those two (`data-highlight-planets`, since most colonies usually
+    //     AREN'T idle and the matches would otherwise be lost in the grid).
+    function dashBadgeButton(className, label, matches, getPlanetId, sectionId, flashColor, highlightWhole) {
+      if (matches.length === 0) return '';
+      if (matches.length === 1) {
+        return `<button class="dash-badge ${className}" type="button" data-goto-planet="${getPlanetId(matches[0])}">⚠ ${label}</button>`;
+      }
+      const highlightAttr = highlightWhole ? '' : ` data-highlight-planets="${matches.map(getPlanetId).join(',')}"`;
+      return `<button class="dash-badge ${className}" type="button" data-goto-section="${sectionId}" data-flash-color="${flashColor}"${highlightAttr}>⚠ ${label}</button>`;
+    }
     const badges = [];
-    if (attackRows.length > 0) badges.push(`<button class="dash-badge attack" type="button" data-goto-planet="${attackRows[0].defender_planet_id}">⚠ ${attackRows.length} 個攻擊警報</button>`);
-    if (transportRows.length > 0) badges.push(`<button class="dash-badge transport" type="button" data-goto-planet="${transportRows[0].defender_planet_id}">⚠ ${transportRows.length} 個運輸待審核</button>`);
-    if (idlePlanets.length > 0) badges.push(`<button class="dash-badge idle" type="button" data-goto-planet="${idlePlanets[0].id}">⚠ ${idlePlanets.length} 個殖民地閒置</button>`);
-    if (exploreIdlePlanets.length > 0) badges.push(`<button class="dash-badge idle" type="button" data-goto-planet="${exploreIdlePlanets[0].id}">⚠ ${exploreIdlePlanets.length} 個殖民地可派遣探索</button>`);
+    if (attackRows.length > 0) {
+      badges.push(dashBadgeButton('attack', `${attackRows.length} 個攻擊警報`, attackRows, m => m.defender_planet_id, 'dashboard-alerts', 'rgba(255,107,107,0.45)', true));
+    }
+    if (transportRows.length > 0) {
+      badges.push(dashBadgeButton('transport', `${transportRows.length} 個運輸待審核`, transportRows, m => m.defender_planet_id, 'dashboard-alerts', 'rgba(240,168,80,0.45)', true));
+    }
+    if (idlePlanets.length > 0) {
+      badges.push(dashBadgeButton('idle', `${idlePlanets.length} 個殖民地閒置`, idlePlanets, p => p.id, 'dashboard-planets', 'rgba(240,168,80,0.45)', false));
+    }
+    if (exploreIdlePlanets.length > 0) {
+      badges.push(dashBadgeButton('idle', `${exploreIdlePlanets.length} 個殖民地可派遣探索`, exploreIdlePlanets, p => p.id, 'dashboard-planets', 'rgba(240,168,80,0.45)', false));
+    }
     summaryEl.innerHTML = badges.join('');
     summaryEl.classList.toggle('hidden', badges.length === 0);
 
@@ -10151,6 +10201,44 @@
             switchToPlanet(target);
           }
         });
+      });
+    });
+
+    // REVISION 2 — badges covering more than one colony: see the big comment
+    // above `dashBadgeButton()`. Stays ON 總覽 (no exitDashboardView()/
+    // switchToPlanet() at all, unlike the data-goto-planet handler above) —
+    // just scrolls to the section that already lists every match and briefly
+    // pulses either the whole section (攻擊/運輸 — every row shown there IS a
+    // match) or the specific matching colony cards (閒置/可派遣探索 —
+    // `data-highlight-planets`, since most colonies usually aren't idle and
+    // would otherwise be lost in the grid).
+    summaryEl.querySelectorAll('button[data-goto-section]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sectionEl = document.getElementById(btn.dataset.gotoSection);
+        if (!sectionEl) return;
+        sectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const idsAttr = btn.dataset.highlightPlanets;
+        const targets = idsAttr
+          ? idsAttr.split(',').map(id => sectionEl.querySelector(`.dash-planet-card[data-planet-id="${id}"]`)).filter(Boolean)
+          : [sectionEl];
+        const flashColor = btn.dataset.flashColor || 'rgba(240,168,80,0.45)';
+        targets.forEach(el => {
+          // Restart the animation even if this same badge was just clicked a
+          // moment ago and the previous pulse is still fading — remove +
+          // force a reflow (`void el.offsetWidth`) before re-adding the class,
+          // the standard trick for re-triggering a CSS animation on an
+          // element that already has its class.
+          el.classList.remove('dash-flash-pulse');
+          void el.offsetWidth;
+          el.style.setProperty('--flash-color', flashColor);
+          el.classList.add('dash-flash-pulse');
+        });
+        setTimeout(() => {
+          targets.forEach(el => {
+            el.classList.remove('dash-flash-pulse');
+            el.style.removeProperty('--flash-color');
+          });
+        }, 2300); // covers the 1.1s × 2-iteration animation plus a little slack
       });
     });
 
