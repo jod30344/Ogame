@@ -4851,11 +4851,22 @@
       return;
     }
     container.classList.remove('hidden');
+    // REVISION: per user request ("我認為畫面停在總覽時，下方的星球列表不要
+    // 有點選的回饋(如下方的紅眼露比)，避免玩家混淆") — while 總覽 itself is
+    // the active view, none of these pills is actually "being looked at" the
+    // way the per-planet page's own `.planet-switcher` pills are; `.active`
+    // here used to just be whichever planet the player had last switched to
+    // BEFORE entering 總覽, which reads as "you're currently on 紅眼露比" even
+    // though you're on 總覽 looking at every colony at once — misleading, per
+    // the user's own screenshot. `dashboardViewActive` is checked directly
+    // (not just gating the call site) so this stays correct even if some
+    // other future caller re-renders this row without going through
+    // enterDashboardView()/exitDashboardView() first.
+    const isActive = p => !dashboardViewActive && planet && String(p.id) === String(planet.id);
     container.innerHTML = myPlanets.map((p, i) => {
-      const isActive = planet && String(p.id) === String(planet.id);
       const homeMark = i === 0 ? '<span class="home-mark">★</span> ' : '';
       const label = p.nickname ? p.nickname : `座標 ${p.coord}`;
-      return `<button class="planet-tab${isActive ? ' active' : ''}" data-planet-id="${p.id}" type="button" title="座標 ${p.coord}">${homeMark}${label}</button>`;
+      return `<button class="planet-tab${isActive(p) ? ' active' : ''}" data-planet-id="${p.id}" type="button" title="座標 ${p.coord}">${homeMark}${label}</button>`;
     }).join('');
     container.querySelectorAll('button[data-planet-id]').forEach(btn => {
       btn.addEventListener('pointerdown', (e) => {
@@ -5189,6 +5200,14 @@
     document.getElementById('planet-switcher')?.classList.add('hidden');
     document.getElementById('resources-bar')?.classList.add('hidden');
     document.getElementById('planet-sections')?.classList.add('hidden');
+    // REVISION: re-render 總覽 own colony-pill row NOW that
+    // dashboardViewActive just flipped true, so its `.active` highlight
+    // (computed off `dashboardViewActive` — see renderDashboardPlanetSwitcher())
+    // clears immediately instead of showing whichever colony was active
+    // before the player entered 總覽. Nothing else about this row's content
+    // changes when entering, so a full renderPlanetSwitcher() isn't needed —
+    // just its own piggybacked re-render.
+    renderDashboardPlanetSwitcher();
     // Short-circuits inside updateCurrentSectionHighlight() while
     // dashboardViewActive is true, so this is safe to call for its other
     // effect (re-measuring --section-nav-height etc. now that two of the
